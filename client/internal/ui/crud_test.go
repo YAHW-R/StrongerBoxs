@@ -44,8 +44,8 @@ func TestCommandCreateEditDeleteFlow(t *testing.T) {
 
 	// :new crea nota + abre editor.
 	m = runCommand(m, "new Lista de compras")
-	if !m.ed.open || len(m.entities) != 1 || m.entities[0].Title != "Lista de compras" {
-		t.Fatalf("tras :new: open=%v ents=%v", m.ed.open, m.entities)
+	if !m.ed.open || len(m.notes) != 1 || m.notes[0].Title != "Lista de compras" {
+		t.Fatalf("tras :new: open=%v ents=%v", m.ed.open, m.notes)
 	}
 
 	// Editar cuerpo y guardar sin cerrar (:w).
@@ -81,31 +81,32 @@ func TestCommandCreateEditDeleteFlow(t *testing.T) {
 
 	// :pin fija; persiste tras refresh.
 	m = runCommand(m, "pin")
-	if !m.entities[0].Pinned {
+	if !m.notes[0].Pinned {
 		t.Fatal(":pin no fijó la nota")
 	}
 
 	// :color cambia el color.
 	m = runCommand(m, "color turquesa")
-	if m.entities[0].Color != "#00BFA5" {
-		t.Fatalf(":color → %q", m.entities[0].Color)
+	if m.notes[0].Color != "#00BFA5" {
+		t.Fatalf(":color → %q", m.notes[0].Color)
 	}
 
-	// :arch oculta la nota del listado por defecto.
+	// :arch oculta la nota del listado por defecto (filtro visual).
 	m = runCommand(m, "arch")
-	if len(m.entities) != 0 {
-		t.Fatal(":arch debería ocultar la nota archivada")
+	if len(m.visibleNotes()) != 0 || len(m.notes) != 1 {
+		t.Fatalf(":arch debería ocultar la nota: visibles=%d totales=%d",
+			len(m.visibleNotes()), len(m.notes))
 	}
 	m = runCommand(m, "all")
-	if len(m.entities) != 1 || !m.entities[0].Archived {
-		t.Fatalf(":all debería mostrar la archivada; hay %d", len(m.entities))
+	if len(m.visibleNotes()) != 1 || !m.visibleNotes()[0].Archived {
+		t.Fatalf(":all debería mostrar la archivada; hay %d", len(m.visibleNotes()))
 	}
 	m = runCommand(m, "arch") // deshacer
 
 	// :d borra.
 	m = runCommand(m, "d")
-	if len(m.entities) != 0 {
-		t.Fatalf("tras :d quedan %d notas", len(m.entities))
+	if len(m.notes) != 0 {
+		t.Fatalf("tras :d quedan %d notas", len(m.notes))
 	}
 	rows, _ = m.st.ListNotes(true)
 	if len(rows) != 0 {
@@ -135,8 +136,8 @@ func TestEditorWQAndQBang(t *testing.T) {
 
 	// :wq guarda y cierra.
 	m = runEditorCmd(m, "wq")
-	if m.ed.open || len(m.entities) != 1 || m.entities[0].Body != "contenido final" {
-		t.Fatalf("tras :wq: open=%v body=%q", m.ed.open, m.entities[0].Body)
+	if m.ed.open || len(m.notes) != 1 || m.notes[0].Body != "contenido final" {
+		t.Fatalf("tras :wq: open=%v body=%q", m.ed.open, m.notes[0].Body)
 	}
 
 	// Reabrir, modificar y salir SIN guardar con :q!.
@@ -146,8 +147,8 @@ func TestEditorWQAndQBang(t *testing.T) {
 	if m.ed.open {
 		t.Fatal(":q! debe cerrar")
 	}
-	if m.entities[0].Title != "Nota wq" {
-		t.Errorf(":q! no debía guardar cambios; título=%q", m.entities[0].Title)
+	if m.notes[0].Title != "Nota wq" {
+		t.Errorf(":q! no debía guardar cambios; título=%q", m.notes[0].Title)
 	}
 }
 
@@ -199,12 +200,12 @@ func TestCursorNavigationJK(t *testing.T) {
 		out, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // cerrar editor
 		m = out.(Model)
 	}
-	if len(m.entities) != 3 {
-		t.Fatalf("precondición: %d entidades", len(m.entities))
+	if len(m.notes) != 3 {
+		t.Fatalf("precondición: %d entidades", len(m.notes))
 	}
 	// El listado es updated_at DESC: la última creada queda primera.
-	if m.selIdx != 0 || m.entities[0].Title != "tres" {
-		t.Fatalf("selIdx=%d título0=%q; quiero 0/'tres'", m.selIdx, m.entities[0].Title)
+	if m.selIdx != 0 || m.notes[0].Title != "tres" {
+		t.Fatalf("selIdx=%d título0=%q; quiero 0/'tres'", m.selIdx, m.notes[0].Title)
 	}
 
 	step := func(key string) Model {
@@ -212,12 +213,12 @@ func TestCursorNavigationJK(t *testing.T) {
 		return out.(Model)
 	}
 	m = step("j") // tres→dos
-	if m.selIdx != 1 || m.entities[m.selIdx].Title != "dos" {
+	if m.selIdx != 1 || m.notes[m.selIdx].Title != "dos" {
 		t.Fatalf("j: selIdx=%d", m.selIdx)
 	}
 	m = step("j") // dos→uno
-	if m.entities[m.selIdx].Title != "uno" {
-		t.Fatalf("segundo j: título=%q", m.entities[m.selIdx].Title)
+	if m.notes[m.selIdx].Title != "uno" {
+		t.Fatalf("segundo j: título=%q", m.notes[m.selIdx].Title)
 	}
 	m = step("j") // clamp al último
 	if m.selIdx != 2 {

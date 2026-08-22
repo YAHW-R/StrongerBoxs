@@ -30,6 +30,9 @@ var (
 	errStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F28B82"))
 
+	okStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#81C995"))
+
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("666666"))
 )

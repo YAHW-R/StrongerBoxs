@@ -64,8 +64,8 @@ func TestSetupFlowCreatesVaultAndShowsBoard(t *testing.T) {
 	if m.state != viewBoard {
 		t.Fatalf("estado final = %d, quiero viewBoard", m.state)
 	}
-	if len(m.entities) != 0 {
-		t.Errorf("tablero de BD vacía no debe tener entidades; hay %d", len(m.entities))
+	if len(m.notes) != 0 {
+		t.Errorf("tablero de BD vacía no debe tener entidades; hay %d", len(m.notes))
 	}
 	if !m.sess.Alive() {
 		t.Error("sesión debería estar activa en el tablero")
@@ -124,7 +124,7 @@ func TestLockEventWipesPlaintextNotes(t *testing.T) {
 	if m2.state != viewBoard {
 		t.Fatalf("setup: estado=%d", m2.state)
 	}
-	m2.entities = []store.Note{{ID: 7, Title: "secreto", Body: "texto en claro"}}
+	m2.notes = []store.Note{{ID: 7, Title: "secreto", Body: "texto en claro"}}
 
 	// En producción el evento llega cuando el TTL/manual ya bloqueó:
 	// simulamos el bloqueo real y luego el aviso al TUI.
@@ -134,7 +134,7 @@ func TestLockEventWipesPlaintextNotes(t *testing.T) {
 	if m3.state != viewLocked {
 		t.Fatalf("lock event debe llevar a viewLocked; got %d", m3.state)
 	}
-	if len(m3.entities) != 0 {
+	if len(m3.notes) != 0 {
 		t.Error("las entidades descifradas deben eliminarse de memoria al bloquear")
 	}
 	if m3.input.Value() != "" {

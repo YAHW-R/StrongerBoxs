@@ -46,17 +46,26 @@ func colorNamesList() string {
 
 const helpText = `Comandos de Strongboxs (estilo ex):
 
-:new [título]        crea una nota y abre el editor
-:e | :edit           edita la nota seleccionada
-:d | :del            borra la nota seleccionada
-:pin                 fija/desfija la nota seleccionada
-:arch                archiva/restaura la nota seleccionada
-:all                 alterna mostrar archivadas
+:new [título]        crea nota (o entrada de vault según la vista)
+:e | :edit           edita la selección
+:d | :del            borra la selección (soft-delete)
+:pin | :arch | :all  fijar · archivar · ver archivadas (notas)
 :color <nombre>      amarillo, verde, azul, rojo, violeta, turquesa, rosa
+:v [notas|secretos]  alterna entre NOTAS y VAULT (tab)
+:find <texto>        aplica filtro ('/' lo abre en vivo)
+:help                esta ayuda
 
 Dentro del editor:
 :w                   guarda sin cerrar
 :wq | :x             guarda y cierra
 :q | :q!             cierra sin guardar
 
-Otras teclas: j/k mover · enter/:e editar · ? ayuda · q salir`
+Teclas del tablero:
+j/k, g/G             mover la selección
+/                    búsqueda incremental (esc limpia)
+tab                  alterna NOTAS ↔ VAULT
+v                    revela contraseñas en las tarjetas (vault)
+y                    copia la contraseña seleccionada al portapapeles
+ctrl+r               revela la contraseña en el editor
+q                    salir`
+

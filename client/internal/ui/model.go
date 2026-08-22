@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,12 +22,20 @@ type viewState int
 const (
 	viewSetup viewState = iota // primer arranque: crear contraseña maestra
 	viewLocked                 // pedir contraseña
-	viewBoard                  // tablero de notas descifrado
+	viewBoard                  // tablero (notas o secretos)
+)
+
+type boardView int
+
+const (
+	secNotes   boardView = iota // notas estilo Keep
+	secSecrets                  // bóveda de contraseñas
 )
 
 const (
 	minMasterLen   = 8
 	countdownEvery = 30 * time.Second
+	maskText       = "••••••••"
 )
 
 type (
@@ -34,18 +43,26 @@ type (
 	tickMsg      time.Time
 )
 
-// editorState es la nota en edición (modal sobre el tablero).
+// editorState es el modal de creación/edición de notas y secretos.
 type editorState struct {
-	open  bool
-	id    int64 // ID de la nota; 0 no ocurre (:new crea antes de abrir)
+	open bool
+	sec  boardView
+	id   int64
+
 	title textinput.Model
 	body  textarea.Model
-	field int // 0 título · 1 cuerpo
+
+	user   textinput.Model
+	pass   textinput.Model
+	url    textinput.Model
+	field  int  // nota: 0..1 · secreto: 0..4
+	reveal bool // mostrar contraseña en claro mientras se edita
+
 	cmd   bool
 	cmdLn textinput.Model
 }
 
-func newEditorState() editorState {
+func newEditorInputs() (textinput.Model, textarea.Model, textinput.Model, textinput.Model, textinput.Model, textinput.Model) {
 	t := textinput.New()
 	t.Placeholder = "Título"
 	t.CharLimit = 120
@@ -57,11 +74,37 @@ func newEditorState() editorState {
 	b.SetWidth(44)
 	b.ShowLineNumbers = false
 
+	u := textinput.New()
+	u.Placeholder = "Usuario"
+	u.CharLimit = 128
+	u.Width = 38
+
+	p := textinput.New()
+	p.Placeholder = "Contraseña"
+	p.CharLimit = 256
+	p.Width = 38
+	p.EchoMode = textinput.EchoPassword
+	p.EchoCharacter = '•'
+
+	url := textinput.New()
+	url.Placeholder = "https://…"
+	url.CharLimit = 256
+	url.Width = 38
+
+	return t, b, u, p, url, newCmdInput(32)
+}
+
+func newCmdInput(limit int) textinput.Model {
 	c := textinput.New()
 	c.Prompt = ":"
-	c.CharLimit = 32
+	c.CharLimit = limit
+	c.Width = 50
+	return c
+}
 
-	return editorState{title: t, body: b, cmdLn: c}
+func newEditorState() editorState {
+	t, b, u, p, url, c := newEditorInputs()
+	return editorState{title: t, body: b, user: u, pass: p, url: url, cmdLn: c}
 }
 
 // Model es el estado raíz de la app BubbleTea.
@@ -70,20 +113,30 @@ type Model struct {
 	st   *store.Store
 
 	state         viewState
+	board         boardView
 	width, height int
 
-	entities     []store.Note // descifradas SOLO mientras hay sesión viva
-	selIdx       int
+	notes   []store.Note   // descifradas SOLO con sesión viva
+	secrets []store.Secret // descifradas ídem
+
+	query       string              // filtro '/' activo
+	searchFocus bool                // escribiendo en la barra '/'
+	searchLn    textinput.Model
+	revealAll   bool                // 'v': mostrar contraseñas en las tarjetas
+
+	selIdx       int // sobre la lista VISIBLE de la vista actual
 	showArchived bool
 	showHelp     bool
 
-	cmdFocus       bool // barra de comandos activa en el tablero
-	cmdLine        textinput.Model
-	ed             editorState
-	input          textinput.Model // contraseña (setup / lock-screen)
-	setting        bool
-	firstPw        string
-	errMsg         string
+	cmdFocus bool
+	cmdLine  textinput.Model
+	ed       editorState
+
+	input   textinput.Model // contraseña maestra (setup / lock-screen)
+	setting bool
+	firstPw string
+	errMsg  string
+	notice  string
 }
 
 func New(sess *session.Manager, st *store.Store) Model {
@@ -95,12 +148,19 @@ func New(sess *session.Manager, st *store.Store) Model {
 	ti.Placeholder = "Contraseña maestra"
 	ti.Focus()
 
+	sl := textinput.New()
+	sl.Prompt = "/"
+	sl.CharLimit = 64
+	sl.Width = 40
+	sl.Placeholder = "filtrar…"
+
 	m := Model{
-		sess:    sess,
-		st:      st,
-		input:   ti,
-		cmdLine: newCommandLine(),
-		ed:      newEditorState(),
+		sess:      sess,
+		st:        st,
+		input:     ti,
+		cmdLine:   newCmdInput(64),
+		ed:        newEditorState(),
+		searchLn:  sl,
 	}
 
 	switch {
@@ -113,14 +173,6 @@ func New(sess *session.Manager, st *store.Store) Model {
 		m.state = viewLocked
 	}
 	return m
-}
-
-func newCommandLine() textinput.Model {
-	c := textinput.New()
-	c.Prompt = ":"
-	c.CharLimit = 64
-	c.Width = 50
-	return c
 }
 
 func (m Model) Init() tea.Cmd {
@@ -168,6 +220,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.ed.open:
 			return m.handleEditorKey(msg)
+		case m.searchFocus:
+			return m.handleSearchKey(msg)
 		case m.state == viewBoard && m.cmdFocus:
 			return m.handleCmdKey(msg)
 		}
@@ -196,15 +250,119 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ---- búsqueda ----
+
+func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.clearSearch()
+		return m, nil
+	case tea.KeyEnter:
+		m.searchFocus = false
+		m.searchLn.Blur()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.searchLn, cmd = m.searchLn.Update(msg)
+	m.query = strings.ToLower(strings.TrimSpace(m.searchLn.Value()))
+	m.clampSel()
+	return m, cmd
+}
+
+func (m *Model) clearSearch() {
+	m.query = ""
+	m.searchFocus = false
+	m.searchLn.Blur()
+	m.searchLn.SetValue("")
+	m.clampSel()
+}
+
+func matchAny(q string, fields ...string) bool {
+	for _, f := range fields {
+		if strings.Contains(strings.ToLower(f), q) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) visibleNotes() []store.Note {
+	out := make([]store.Note, 0, len(m.notes))
+	for _, n := range m.notes {
+		if n.Archived && !m.showArchived {
+			continue
+		}
+		if m.query != "" && !matchAny(m.query, n.Title, n.Body) {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func (m Model) visibleSecrets() []store.Secret {
+	out := make([]store.Secret, 0, len(m.secrets))
+	for _, s := range m.secrets {
+		if m.query != "" && !matchAny(m.query, s.Title, s.Username, s.URL, s.Notes) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// visibleCount nº de elementos tras aplicar archivado+búsqueda.
+func (m Model) visibleCount() int {
+	if m.board == secSecrets {
+		return len(m.visibleSecrets())
+	}
+	return len(m.visibleNotes())
+}
+
+// curNote / curSecret resuelven la selección visible a la entidad real.
+func (m Model) curNote() (store.Note, bool) {
+	vn := m.visibleNotes()
+	if m.selIdx < 0 || m.selIdx >= len(vn) {
+		return store.Note{}, false
+	}
+	id := vn[m.selIdx].ID
+	for _, n := range m.notes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return store.Note{}, false
+}
+
+func (m Model) curSecret() (store.Secret, bool) {
+	vs := m.visibleSecrets()
+	if m.selIdx < 0 || m.selIdx >= len(vs) {
+		return store.Secret{}, false
+	}
+	id := vs[m.selIdx].ID
+	for _, s := range m.secrets {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return store.Secret{}, false
+}
+
 // ---- teclado: tablero ----
 
 func (m Model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case ":":
-		m.errMsg = ""
+		m.errMsg, m.notice = "", ""
 		m.cmdLine.SetValue("")
 		m.cmdFocus = true
 		m.cmdLine.Focus()
+		return m, textinput.Blink
+
+	case "/":
+		m.errMsg, m.notice = "", ""
+		m.searchFocus = true
+		m.searchLn.Focus()
 		return m, textinput.Blink
 
 	case "?":
@@ -216,7 +374,10 @@ func (m Model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "esc":
 		m.showHelp = false
-		m.errMsg = ""
+		m.errMsg, m.notice = "", ""
+		if m.query != "" {
+			m.clearSearch()
+		}
 		return m, nil
 
 	case "j", "down":
@@ -232,19 +393,31 @@ func (m Model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "G", "end":
-		m.selIdx = len(m.entities) - 1
-		if m.selIdx < 0 {
-			m.selIdx = 0
+		m.selIdx = m.visibleCount() - 1
+		m.clampSel()
+		return m, nil
+
+	case "tab", "shift+tab":
+		if m.board == secNotes {
+			m.board = secSecrets
+		} else {
+			m.board = secNotes
+		}
+		m.selIdx = 0
+		m.notice = ""
+		return m, nil
+
+	case "v":
+		if m.board == secSecrets {
+			m.revealAll = !m.revealAll
 		}
 		return m, nil
 
+	case "y":
+		return m.yankPassword()
+
 	case "enter", "e":
-		if !m.hasSelection() {
-			m.setErr("No hay notas: crea una con :new")
-			return m, nil
-		}
-		m.openEditor(m.entities[m.selIdx])
-		return m, textinput.Blink
+		return m.cmdEdit()
 	}
 	return m, nil
 }
@@ -270,14 +443,14 @@ func (m *Model) closeCmdBar() {
 	m.cmdLine.SetValue("")
 }
 
-// ---- ejecución de comandos (tablero) ----
+// ---- ejecución de comandos ----
 
 func (m Model) executeCommand(raw string) (tea.Model, tea.Cmd) {
 	name, args, ok := parseCommand(raw)
 	if !ok {
 		return m, nil
 	}
-	m.errMsg = ""
+	m.errMsg, m.notice = "", ""
 
 	switch name {
 	case "new", "n":
@@ -287,14 +460,25 @@ func (m Model) executeCommand(raw string) (tea.Model, tea.Cmd) {
 	case "delete", "del", "d", "rm":
 		return m.cmdDelete()
 	case "pin":
-		return m.cmdToggle(func(n *store.Note) { n.Pinned = !n.Pinned })
+		return m.cmdTogglePin()
 	case "archive", "arch":
-		return m.cmdToggle(func(n *store.Note) { n.Archived = !n.Archived })
+		return m.cmdToggleArch()
 	case "color":
 		return m.cmdColor(args)
 	case "all":
+		if m.board != secNotes {
+			m.setErr("':all' solo aplica a notas.")
+			return m, nil
+		}
 		m.showArchived = !m.showArchived
 		m.refresh()
+		return m, nil
+	case "vault", "v":
+		return m.cmdSwitchView(args)
+	case "find", "f":
+		m.searchLn.SetValue(args)
+		m.query = strings.ToLower(strings.TrimSpace(args))
+		m.clampSel()
 		return m, nil
 	case "help", "h":
 		m.showHelp = !m.showHelp
@@ -310,52 +494,117 @@ func (m Model) executeCommand(raw string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m Model) cmdNew(title string) (tea.Model, tea.Cmd) {
-	if strings.TrimSpace(title) == "" {
+func (m Model) cmdSwitchView(arg string) (tea.Model, tea.Cmd) {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "":
+		if m.board == secNotes {
+			m.board = secSecrets
+		} else {
+			m.board = secNotes
+		}
+	case "notas", "notes", "n":
+		m.board = secNotes
+	case "secretos", "secrets", "s", "contraseñas":
+		m.board = secSecrets
+	default:
+		m.setErr("Vista inválida: usa :v notas | :v secretos")
+		return m, nil
+	}
+	m.selIdx = 0
+	m.notice = ""
+	return m, nil
+}
+
+func (m Model) cmdNew(arg string) (tea.Model, tea.Cmd) {
+	if m.board == secSecrets {
+		return m.secretNew(arg)
+	}
+	title := strings.TrimSpace(arg)
+	if title == "" {
 		title = "Nueva nota"
 	}
-	sealedTitle, err := m.sess.SealField(title)
+	st_, err := m.sess.SealField(title)
 	if err != nil {
 		m.setErr(err.Error())
 		return m, nil
 	}
-	sealedBody, err := m.sess.SealField("")
+	sb, err := m.sess.SealField("")
 	if err != nil {
 		m.setErr(err.Error())
 		return m, nil
 	}
-	created, err := m.st.CreateNote(sealedTitle, sealedBody, "")
+	created, err := m.st.CreateNote(st_, sb, "")
 	if err != nil {
 		m.setErr(err.Error())
 		return m, nil
 	}
 	m.refresh()
-	for i := range m.entities {
-		if m.entities[i].ID == created.ID {
-			m.selIdx = i
-			break
-		}
+	m.selectByID(created.ID)
+	m.openEditor(created.ID)
+	return m, textinput.Blink
+}
+
+func (m Model) secretNew(title string) (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(title) == "" {
+		title = "Nueva entrada"
 	}
-	m.openEditor(m.entities[m.selIdx])
+	sc := store.Secret{Title: title}
+	created, err := m.createSecret(sc)
+	if err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.refresh()
+	m.selectByID(created.ID)
+	m.openEditor(created.ID)
 	return m, textinput.Blink
 }
 
 func (m Model) cmdEdit() (tea.Model, tea.Cmd) {
-	if !m.hasSelection() {
-		m.setErr("No hay notas: crea una con :new")
+	if m.visibleCount() == 0 {
+		if m.board == secSecrets {
+			m.setErr("Sin entradas: crea una con :new")
+		} else {
+			m.setErr("No hay notas: crea una con :new")
+		}
 		return m, nil
 	}
-	m.openEditor(m.entities[m.selIdx])
+	var id int64
+	if m.board == secSecrets {
+		s, ok := m.curSecret()
+		if !ok {
+			return m, nil
+		}
+		id = s.ID
+	} else {
+		n, ok := m.curNote()
+		if !ok {
+			return m, nil
+		}
+		id = n.ID
+	}
+	m.openEditor(id)
 	return m, textinput.Blink
 }
 
 func (m Model) cmdDelete() (tea.Model, tea.Cmd) {
-	if !m.hasSelection() {
-		m.setErr("Selecciona una nota con j/k")
-		return m, nil
+	var err error
+	if m.board == secSecrets {
+		s, ok := m.curSecret()
+		if !ok {
+			m.setErr("Selecciona una entrada con j/k")
+			return m, nil
+		}
+		err = m.st.SoftDeleteSecret(s.ID)
+	} else {
+		n, ok := m.curNote()
+		if !ok {
+			m.setErr("Selecciona una nota con j/k")
+			return m, nil
+		}
+		err = m.st.SoftDeleteNote(n.ID)
 	}
-	id := m.entities[m.selIdx].ID
-	if err := m.st.SoftDeleteNote(id); err != nil {
+	if err != nil {
 		m.setErr(err.Error())
 		return m, nil
 	}
@@ -363,13 +612,36 @@ func (m Model) cmdDelete() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) cmdToggle(mutate func(*store.Note)) (tea.Model, tea.Cmd) {
-	if !m.hasSelection() {
+func (m Model) cmdTogglePin() (tea.Model, tea.Cmd) {
+	if m.board != secNotes {
+		m.setErr("':pin' solo aplica a notas.")
+		return m, nil
+	}
+	n, ok := m.curNote()
+	if !ok {
 		m.setErr("Selecciona una nota con j/k")
 		return m, nil
 	}
-	n := m.entities[m.selIdx]
-	mutate(&n)
+	n.Pinned = !n.Pinned
+	if err := m.persistNote(n); err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m Model) cmdToggleArch() (tea.Model, tea.Cmd) {
+	if m.board != secNotes {
+		m.setErr("':arch' solo aplica a notas.")
+		return m, nil
+	}
+	n, ok := m.curNote()
+	if !ok {
+		m.setErr("Selecciona una nota con j/k")
+		return m, nil
+	}
+	n.Archived = !n.Archived
 	if err := m.persistNote(n); err != nil {
 		m.setErr(err.Error())
 		return m, nil
@@ -379,12 +651,20 @@ func (m Model) cmdToggle(mutate func(*store.Note)) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) cmdColor(arg string) (tea.Model, tea.Cmd) {
+	if m.board != secNotes {
+		m.setErr("':color' solo aplica a notas.")
+		return m, nil
+	}
 	hex, ok := colorByName(arg)
 	if !ok {
 		m.setErr("Color inválido: usa " + colorNamesList())
 		return m, nil
 	}
-	n := m.entities[m.selIdx]
+	n, ok := m.curNote()
+	if !ok {
+		m.setErr("Selecciona una nota con j/k")
+		return m, nil
+	}
 	n.Color = hex
 	if err := m.persistNote(n); err != nil {
 		m.setErr(err.Error())
@@ -394,10 +674,46 @@ func (m Model) cmdColor(arg string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// yankPassword copia la contraseña de la entrada seleccionada al portapapeles.
+func (m Model) yankPassword() (tea.Model, tea.Cmd) {
+	if m.board != secSecrets {
+		m.setErr("'y' copia contraseñas: cambia a la bóveda con :v secretos")
+		return m, nil
+	}
+	s, ok := m.curSecret()
+	if !ok {
+		m.setErr("Selecciona una entrada con j/k")
+		return m, nil
+	}
+	if err := clipboard.WriteAll(s.Password); err != nil {
+		m.setErr(fmt.Sprintf("portapapeles no disponible: %v", err))
+		return m, nil
+	}
+	m.notice = "✓ Contraseña copiada al portapapeles"
+	return m, nil
+}
+
 // ---- persistencia ----
 
-// persistNote cifra título/cuerpo y escribe la fila; la entidad en memoria
-// conserva texto en claro solo para la vista actual.
+func (m *Model) selectByID(id int64) {
+	count := m.visibleCount()
+	for i := 0; i < count; i++ {
+		if m.idAtVisible(i) == id {
+			m.selIdx = i
+			return
+		}
+	}
+	m.clampSel()
+}
+
+func (m Model) idAtVisible(i int) int64 {
+	if m.board == secSecrets {
+		return m.visibleSecrets()[i].ID
+	}
+	return m.visibleNotes()[i].ID
+}
+
+// persistNote cifra título/cuerpo y escribe la fila.
 func (m Model) persistNote(n store.Note) error {
 	db := n
 	var err error
@@ -410,17 +726,69 @@ func (m Model) persistNote(n store.Note) error {
 	return m.st.UpdateNote(&db)
 }
 
-// refresh recarga entidades descifradas desde la BD y ajusta el cursor.
+// persistSecret cifra los cuatro campos sensibles (URL queda en claro).
+func (m Model) persistSecret(s store.Secret) error {
+	db := s
+	var err error
+	if db.Title, err = m.sess.SealField(s.Title); err != nil {
+		return err
+	}
+	if db.Username, err = m.sess.SealField(s.Username); err != nil {
+		return err
+	}
+	if db.Password, err = m.sess.SealField(s.Password); err != nil {
+		return err
+	}
+	if db.Notes, err = m.sess.SealField(s.Notes); err != nil {
+		return err
+	}
+	return m.st.UpdateSecret(&db)
+}
+
+// createSecret inserta una entrada ya cifrada.
+func (m Model) createSecret(sc store.Secret) (store.Secret, error) {
+	db := sc
+	var err error
+	if db.Title, err = m.sess.SealField(sc.Title); err != nil {
+		return sc, err
+	}
+	if db.Username, err = m.sess.SealField(""); err != nil {
+		return sc, err
+	}
+	if db.Password, err = m.sess.SealField(""); err != nil {
+		return sc, err
+	}
+	if db.Notes, err = m.sess.SealField(""); err != nil {
+		return sc, err
+	}
+	return m.st.CreateSecret(db)
+}
+
+// refresh recarga notas y secretos descifrados desde la BD.
 func (m *Model) refresh() {
-	list, err := m.st.ListNotes(m.showArchived)
-	m.entities = nil
+	list, err := m.st.ListNotes(true) // archivadas incluidas: el filtro es visual
+	m.notes = nil
 	if err != nil {
 		m.setErr(err.Error())
 	} else {
 		for _, sn := range list {
 			sn.Title = m.unsealOr(sn.Title, "(sin título)")
 			sn.Body = m.unsealOr(sn.Body, "")
-			m.entities = append(m.entities, sn)
+			m.notes = append(m.notes, sn)
+		}
+	}
+
+	sl, err := m.st.ListSecrets()
+	m.secrets = nil
+	if err != nil {
+		m.setErr(err.Error())
+	} else {
+		for _, ss := range sl {
+			ss.Title = m.unsealOr(ss.Title, "(sin título)")
+			ss.Username = m.unsealOr(ss.Username, "")
+			ss.Password = m.unsealOr(ss.Password, "")
+			ss.Notes = m.unsealOr(ss.Notes, "")
+			m.secrets = append(m.secrets, ss)
 		}
 	}
 	m.clampSel()
@@ -437,13 +805,10 @@ func (m *Model) unsealOr(envelope, fallback string) string {
 
 // ---- cursor ----
 
-func (m Model) hasSelection() bool {
-	return len(m.entities) > 0 && m.selIdx >= 0 && m.selIdx < len(m.entities)
-}
-
 func (m *Model) clampSel() {
-	if m.selIdx >= len(m.entities) {
-		m.selIdx = len(m.entities) - 1
+	c := m.visibleCount()
+	if m.selIdx >= c {
+		m.selIdx = c - 1
 	}
 	if m.selIdx < 0 {
 		m.selIdx = 0
@@ -451,7 +816,7 @@ func (m *Model) clampSel() {
 }
 
 func (m *Model) moveSel(delta int) {
-	if len(m.entities) == 0 {
+	if m.visibleCount() == 0 {
 		return
 	}
 	m.selIdx += delta
@@ -462,7 +827,7 @@ func (m *Model) moveSel(delta int) {
 
 func (m *Model) setErr(s string) { m.errMsg = s }
 
-// ---- autenticación (setup / lock) ----
+// ---- autenticación ----
 
 func (m Model) submitUnlock() (tea.Model, tea.Cmd) {
 	pw := m.input.Value()
@@ -525,13 +890,17 @@ func (m Model) submitSetup() (tea.Model, tea.Cmd) {
 
 // enterLocked limpia todo texto en claro de memoria y muestra el candado.
 func (m *Model) enterLocked() {
-	m.entities = nil
+	m.notes = nil
+	m.secrets = nil
 	m.state = viewLocked
+	m.board = secNotes
 	m.setting = false
 	m.firstPw = ""
-	m.errMsg = ""
+	m.errMsg, m.notice = "", ""
+	m.revealAll = false
 	m.closeCmdBar()
 	m.closeEditor()
+	m.clearSearch()
 	m.showHelp = false
 	m.input.SetValue("")
 	m.input.Focus()
@@ -539,56 +908,69 @@ func (m *Model) enterLocked() {
 
 // ---- editor ----
 
-func (m *Model) openEditor(n store.Note) {
+func (m *Model) openEditor(id int64) {
 	m.ed.open = true
-	m.ed.id = n.ID
-	m.ed.title.SetValue(n.Title)
-	m.ed.body.SetValue(n.Body)
+	m.ed.sec = m.board
+	m.ed.id = id
 	m.ed.field = 0
-	m.ed.title.Focus()
-	m.ed.body.Blur()
+	m.ed.reveal = false
 	m.ed.cmd = false
 	m.ed.cmdLn.SetValue("")
-	m.errMsg = ""
+	m.ed.title.Blur()
+	m.ed.body.Blur()
+	m.ed.user.Blur()
+	m.ed.pass.Blur()
+	m.ed.url.Blur()
+	m.ed.cmdLn.Blur()
+	m.errMsg, m.notice = "", ""
+
+	if m.board == secSecrets {
+		if s, ok := m.byIDSecret(id); ok {
+			m.ed.title.SetValue(s.Title)
+			m.ed.user.SetValue(s.Username)
+			m.ed.pass.SetValue(s.Password)
+			m.ed.url.SetValue(s.URL)
+			m.ed.body.SetValue(s.Notes)
+		}
+		m.ed.title.Focus()
+		return
+	}
+	if n, ok := m.byIDNote(id); ok {
+		m.ed.title.SetValue(n.Title)
+		m.ed.body.SetValue(n.Body)
+	}
+	m.ed.title.Focus()
+}
+
+func (m Model) byIDNote(id int64) (store.Note, bool) {
+	for _, n := range m.notes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return store.Note{}, false
+}
+
+func (m Model) byIDSecret(id int64) (store.Secret, bool) {
+	for _, s := range m.secrets {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return store.Secret{}, false
 }
 
 func (m *Model) closeEditor() {
 	m.ed.open = false
 	m.ed.id = 0
 	m.ed.cmd = false
+	m.ed.reveal = false
 	m.ed.title.Blur()
 	m.ed.body.Blur()
+	m.ed.user.Blur()
+	m.ed.pass.Blur()
+	m.ed.url.Blur()
 	m.ed.cmdLn.Blur()
-}
-
-// saveEditor persiste el búfer del editor; con close=true vuelve al tablero.
-func (m Model) saveEditor(close bool) (tea.Model, tea.Cmd) {
-	var target *store.Note
-	for i := range m.entities {
-		if m.entities[i].ID == m.ed.id {
-			target = &m.entities[i]
-			break
-		}
-	}
-	if target == nil {
-		m.setErr("La nota ya no existe.")
-		m.closeEditor()
-		return m, nil
-	}
-	target.Title = m.ed.title.Value()
-	target.Body = m.ed.body.Value()
-	if strings.TrimSpace(target.Title) == "" {
-		target.Title = "(sin título)"
-	}
-	if err := m.persistNote(*target); err != nil {
-		m.setErr(err.Error())
-		return m, nil
-	}
-	m.refresh()
-	if close {
-		m.closeEditor()
-	}
-	return m, nil
 }
 
 func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -611,44 +993,93 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch {
+	case msg.Type == tea.KeyEsc:
 		m.closeEditor()
 		return m, nil
-	case tea.KeyTab:
-		m.ed.field = 1 - m.ed.field
+	case msg.Type == tea.KeyTab || msg.Type == tea.KeyShiftTab:
+		delta := 1
+		if msg.Type == tea.KeyShiftTab {
+			delta = -1
+		}
+		fields := m.editorFieldCount()
+		m.ed.field = ((m.ed.field+delta)%fields + fields) % fields
 		m.refocusEditorField()
 		return m, textinput.Blink
-	case tea.KeyCtrlS:
+	case msg.String() == "ctrl+s":
 		return m.saveEditor(false)
+	case msg.String() == "ctrl+r" && m.ed.sec == secSecrets:
+		m.ed.reveal = !m.ed.reveal
+		if m.ed.reveal {
+			m.ed.pass.EchoMode = textinput.EchoNormal
+		} else {
+			m.ed.pass.EchoMode = textinput.EchoPassword
+		}
+		return m, nil
 	}
 	if msg.String() == ":" {
 		m.ed.cmd = true
 		m.ed.cmdLn.Focus()
 		return m, textinput.Blink
 	}
+	return m.routeEditorField(msg)
+}
 
-	var cmd tea.Cmd
-	switch m.ed.field {
-	case 0:
-		m.ed.title, cmd = m.ed.title.Update(msg)
-	default:
-		var bodyCmd tea.Cmd
-		m.ed.body, bodyCmd = m.ed.body.Update(msg)
-		cmd = bodyCmd
+func (m Model) editorFieldCount() int {
+	if m.ed.sec == secSecrets {
+		return 5 // título, usuario, contraseña, url, notas
 	}
-	return m, cmd
+	return 2 // título, cuerpo
 }
 
 func (m *Model) refocusEditorField() {
-	switch m.ed.field {
-	case 0:
+	m.ed.title.Blur()
+	m.ed.body.Blur()
+	m.ed.user.Blur()
+	m.ed.pass.Blur()
+	m.ed.url.Blur()
+	switch {
+	case m.ed.sec == secNotes && m.ed.field == 0:
 		m.ed.title.Focus()
-		m.ed.body.Blur()
+	case m.ed.sec == secNotes:
+		m.ed.body.Focus()
+	case m.ed.field == 0:
+		m.ed.title.Focus()
+	case m.ed.field == 1:
+		m.ed.user.Focus()
+	case m.ed.field == 2:
+		m.ed.pass.Focus()
+	case m.ed.field == 3:
+		m.ed.url.Focus()
 	default:
-		m.ed.title.Blur()
 		m.ed.body.Focus()
 	}
+}
+
+func (m Model) routeEditorField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	if m.ed.sec == secNotes {
+		switch m.ed.field {
+		case 0:
+			m.ed.title, cmd = m.ed.title.Update(msg)
+		default:
+			m.ed.body, cmd = m.ed.body.Update(msg)
+		}
+		return m, cmd
+	}
+	switch m.ed.field {
+	case 0:
+		m.ed.title, cmd = m.ed.title.Update(msg)
+	case 1:
+		m.ed.user, cmd = m.ed.user.Update(msg)
+	case 2:
+		m.ed.pass, cmd = m.ed.pass.Update(msg)
+	case 3:
+		m.ed.url, cmd = m.ed.url.Update(msg)
+	default:
+		m.ed.body, cmd = m.ed.body.Update(msg)
+	}
+	return m, cmd
 }
 
 func (m Model) execEditorCmd(raw string) (tea.Model, tea.Cmd) {
@@ -672,6 +1103,59 @@ func (m Model) execEditorCmd(raw string) (tea.Model, tea.Cmd) {
 		m.setErr("En el editor: :w :wq :x :q :q!")
 		return m, nil
 	}
+}
+
+// saveEditor persiste el búfer según el tipo de entidad editada.
+func (m Model) saveEditor(close bool) (tea.Model, tea.Cmd) {
+	if m.ed.sec == secSecrets {
+		return m.saveSecret(close)
+	}
+	target, ok := m.byIDNote(m.ed.id)
+	if !ok {
+		m.setErr("La nota ya no existe.")
+		m.closeEditor()
+		return m, nil
+	}
+	target.Title = m.ed.title.Value()
+	target.Body = m.ed.body.Value()
+	if strings.TrimSpace(target.Title) == "" {
+		target.Title = "(sin título)"
+	}
+	if err := m.persistNote(target); err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.refresh()
+	if close {
+		m.closeEditor()
+	}
+	return m, nil
+}
+
+func (m Model) saveSecret(close bool) (tea.Model, tea.Cmd) {
+	target, ok := m.byIDSecret(m.ed.id)
+	if !ok {
+		m.setErr("La entrada ya no existe.")
+		m.closeEditor()
+		return m, nil
+	}
+	target.Title = m.ed.title.Value()
+	target.Username = m.ed.user.Value()
+	target.Password = m.ed.pass.Value()
+	target.URL = strings.TrimSpace(m.ed.url.Value())
+	target.Notes = m.ed.body.Value()
+	if strings.TrimSpace(target.Title) == "" {
+		target.Title = "(sin título)"
+	}
+	if err := m.persistSecret(target); err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.refresh()
+	if close {
+		m.closeEditor()
+	}
+	return m, nil
 }
 
 // ---- vista raíz ----
@@ -716,17 +1200,32 @@ func (m Model) viewAuth(title, subtitle string) string {
 }
 
 func (m Model) statusLine() string {
-	if m.cmdFocus {
+	switch {
+	case m.searchFocus:
+		return helpStyle.Render("enter · aplicar    esc · limpiar")
+	case m.cmdFocus:
 		return helpStyle.Render("enter · ejecutar    esc · cancelar")
 	}
+
+	label := "NOTAS"
+	if m.board == secSecrets {
+		label = "VAULT"
+	}
+	parts := []string{label}
+
+	if m.query != "" {
+		parts = append(parts, fmt.Sprintf("🔍 %q %d/%d",
+			m.query, m.visibleCount(), len(m.notes)+len(m.secrets)))
+	}
 	if !m.sess.Alive() {
-		return errStyle.Render("🔒 sesión bloqueada")
+		parts = append(parts, errStyle.Render("🔒 bloqueada"))
+		return joinStatus(parts)
 	}
 	d := m.sess.Remaining()
 	if d < 0 {
 		d = 0
 	}
 	mins := int((d + time.Minute - 1) / time.Minute) // techo
-	return helpStyle.Render(fmt.Sprintf(
-		"j/k mover · : comandos · ? ayuda · 🔓 %d min    q salir", mins))
+	parts = append(parts, fmt.Sprintf("🔓 %d min", mins))
+	return joinStatus(parts)
 }
