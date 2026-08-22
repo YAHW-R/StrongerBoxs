@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS secrets (
 	deleted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_secrets_updated ON secrets(updated_at);
+
+-- Metadatos de la bóveda: params KDF, salt y DEK cifrada.
+CREATE TABLE IF NOT EXISTS vault_meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 // Store encapsula el acceso a la BD local.

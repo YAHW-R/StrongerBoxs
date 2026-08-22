@@ -12,14 +12,20 @@ type Note struct {
 }
 
 // RenderCard dibuja una nota con borde redondeado y color propio.
-func RenderCard(n Note) string {
+// La tarjeta seleccionada usa borde grueso para resaltarla.
+func RenderCard(n Note, selected bool) string {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(n.Color).
 		Render(n.Title)
 
+	border := lipgloss.RoundedBorder()
+	if selected {
+		border = lipgloss.DoubleBorder()
+	}
+
 	card := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(border).
 		BorderForeground(n.Color).
 		Padding(1, 2)
 

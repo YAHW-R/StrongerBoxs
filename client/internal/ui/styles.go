@@ -16,11 +16,10 @@ var (
 			Background(lipgloss.Color("7C4DFF")).
 			Padding(0, 2)
 
-	helloBoxStyle = lipgloss.NewStyle().
+	authBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorViolet).
-			Padding(2, 6).
-			MarginTop(2)
+			Padding(1, 4)
 
 	boardTitleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -28,16 +27,8 @@ var (
 			MarginBottom(1).
 			MarginLeft(1)
 
-	cardBaseStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("444444")).
-			Padding(1, 2)
-
-	cardTitleStyle = lipgloss.NewStyle().
-			Bold(true)
-
-	cardBodyStyle = lipgloss.NewStyle().
-			Faint(true)
+	errStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F28B82"))
 
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("666666"))
