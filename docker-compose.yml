@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: strongboxs
+      POSTGRES_PASSWORD: strongboxs
+      POSTGRES_DB: strongboxs
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U strongboxs -d strongboxs"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./server
+    environment:
+      STRONGBOXS_DATABASE_URL: postgresql+psycopg://strongboxs:strongboxs@db:5432/strongboxs
+      STRONGBOXS_SECRET_KEY: ${STRONGBOXS_SECRET_KEY:-change-me-in-prod}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

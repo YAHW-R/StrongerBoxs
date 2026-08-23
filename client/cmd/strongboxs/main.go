@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -10,6 +13,7 @@ import (
 	"github.com/yahwr/strongboxs/client/internal/authn"
 	"github.com/yahwr/strongboxs/client/internal/session"
 	"github.com/yahwr/strongboxs/client/internal/store"
+	"github.com/yahwr/strongboxs/client/internal/sync"
 	"github.com/yahwr/strongboxs/client/internal/ui"
 )
 
@@ -30,6 +34,35 @@ func fatal(err error) {
 }
 
 // runTUI lanza la app: el propio TUI gestiona setup, lock-screen y desbloqueo.
+// startSyncIfConfigured lanza el motor de sincronización en segundo plano
+// si hay variables de entorno de sync (no interfiere con la TUI).
+func startSyncIfConfigured(st *store.Store) (context.CancelFunc, bool) {
+	url := os.Getenv("STRONGBOXS_SYNC_URL")
+	if url == "" {
+		return nil, false
+	}
+	interval := 60 * time.Second
+	if s := os.Getenv("STRONGBOXS_SYNC_INTERVAL_SECS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			interval = time.Duration(n) * time.Second
+		}
+	}
+	mgr := sync.NewManager(
+		st,
+		sync.Credentials{
+			BaseURL:  url,
+			Username: os.Getenv("STRONGBOXS_SYNC_USER"),
+			Password: os.Getenv("STRONGBOXS_SYNC_PASSWORD"),
+		},
+		interval,
+		os.Getenv("STRONGBOXS_SYNC_DEBUG") != "",
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.Start(ctx)
+	fmt.Printf("⟳ Sincronización en segundo plano activa → %s (cada %s)\n", url, interval)
+	return cancel, true
+}
+
 func runTUI() {
 	st, err := store.Open("")
 	if err != nil {
@@ -38,6 +71,14 @@ func runTUI() {
 	defer st.Close()
 
 	sess := session.New(st, session.DefaultTTL, nil).WithAuthorizer(authn.Default())
+	if _, err := sess.Ensure(); err != nil { // primer inicio: crea; si no: desbloquea
+		st.Close()
+		fatal(err)
+	}
+	defer sess.Lock()
+
+	cancelSync, _ := startSyncIfConfigured(st)
+	defer cancelSync()
 
 	p := tea.NewProgram(ui.New(sess, st), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

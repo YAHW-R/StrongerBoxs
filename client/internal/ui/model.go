@@ -20,9 +20,9 @@ import (
 type viewState int
 
 const (
-	viewSetup viewState = iota // primer arranque: crear contraseña maestra
-	viewLocked                 // pedir contraseña
-	viewBoard                  // tablero (notas o secretos)
+	viewSetup  viewState = iota // primer arranque: crear contraseña maestra
+	viewLocked                  // pedir contraseña
+	viewBoard                   // tablero (notas o secretos)
 )
 
 type boardView int
@@ -119,10 +119,10 @@ type Model struct {
 	notes   []store.Note   // descifradas SOLO con sesión viva
 	secrets []store.Secret // descifradas ídem
 
-	query       string              // filtro '/' activo
-	searchFocus bool                // escribiendo en la barra '/'
+	query       string // filtro '/' activo
+	searchFocus bool   // escribiendo en la barra '/'
 	searchLn    textinput.Model
-	revealAll   bool                // 'v': mostrar contraseñas en las tarjetas
+	revealAll   bool // 'v': mostrar contraseñas en las tarjetas
 
 	selIdx       int // sobre la lista VISIBLE de la vista actual
 	showArchived bool
@@ -155,12 +155,12 @@ func New(sess *session.Manager, st *store.Store) Model {
 	sl.Placeholder = "filtrar…"
 
 	m := Model{
-		sess:      sess,
-		st:        st,
-		input:     ti,
-		cmdLine:   newCmdInput(64),
-		ed:        newEditorState(),
-		searchLn:  sl,
+		sess:     sess,
+		st:       st,
+		input:    ti,
+		cmdLine:  newCmdInput(64),
+		ed:       newEditorState(),
+		searchLn: sl,
 	}
 
 	switch {

@@ -120,7 +120,12 @@ func newUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func nowUTC() time.Time { return time.Now().UTC() }
+// nowUTC trunca a MICROSEGUNDOS: el servidor (Python datetime) no puede
+// representar nanosegundos y un eco con menos precisión aparecería
+// "más nuevo" en la comparación LWW por fecha.
+func nowUTC() time.Time {
+	return time.Now().UTC().Truncate(time.Microsecond)
+}
 
 func parseTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339Nano, s)
@@ -233,11 +238,13 @@ func (s *Store) UpdateNote(n *Note) error {
 	return nil
 }
 
-// SoftDeleteNote marca la nota como borrada (necesario para replicar
-// el borrado al servidor sin perder datos).
+// SoftDeleteNote marca la nota como borrada y AVANZA su fecha/versión:
+// la tombstone debe ganar cualquier comparación LWW al sincronizar.
 func (s *Store) SoftDeleteNote(id int64) error {
-	now := nowUTC().Format(time.RFC3339Nano)
-	res, err := s.db.Exec(`UPDATE notes SET deleted_at=?, dirty=1 WHERE id=?`, now, id)
+	now := nowUTC()
+	res, err := s.db.Exec(
+		`UPDATE notes SET deleted_at=?, updated_at=?, version=version+1, dirty=1 WHERE id=?`,
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id)
 	if err != nil {
 		return fmt.Errorf("store: borrar nota %d: %w", id, err)
 	}
@@ -337,10 +344,12 @@ func (s *Store) UpdateSecret(sc *Secret) error {
 	return nil
 }
 
-// SoftDeleteSecret marca una entrada como borrada.
+// SoftDeleteSecret marca una entrada como borrada, avanzando fecha/versión.
 func (s *Store) SoftDeleteSecret(id int64) error {
-	now := nowUTC().Format(time.RFC3339Nano)
-	res, err := s.db.Exec(`UPDATE secrets SET deleted_at=?, dirty=1 WHERE id=?`, now, id)
+	now := nowUTC()
+	res, err := s.db.Exec(
+		`UPDATE secrets SET deleted_at=?, updated_at=?, version=version+1, dirty=1 WHERE id=?`,
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id)
 	if err != nil {
 		return fmt.Errorf("store: borrar secreto %d: %w", id, err)
 	}

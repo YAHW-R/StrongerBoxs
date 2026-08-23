@@ -23,12 +23,12 @@ func parseCommand(raw string) (name, args string, ok bool) {
 // paletteNames nombres de color aceptados por :color.
 var paletteNames = map[string]string{
 	"amarillo": "#F9AB00", "yellow": "#F9AB00",
-	"verde":    "#34A853", "green": "#34A853",
-	"azul":     "#4285F4", "blue": "#4285F4",
-	"rojo":     "#EA4335", "red": "#EA4335",
-	"violeta":  "#7C4DFF", "violet": "#7C4DFF",
+	"verde": "#34A853", "green": "#34A853",
+	"azul": "#4285F4", "blue": "#4285F4",
+	"rojo": "#EA4335", "red": "#EA4335",
+	"violeta": "#7C4DFF", "violet": "#7C4DFF",
 	"turquesa": "#00BFA5", "teal": "#00BFA5",
-	"rosa":     "#F06292", "pink": "#F06292",
+	"rosa": "#F06292", "pink": "#F06292",
 }
 
 func colorByName(s string) (string, bool) {
@@ -68,4 +68,3 @@ v                    revela contraseñas en las tarjetas (vault)
 y                    copia la contraseña seleccionada al portapapeles
 ctrl+r               revela la contraseña en el editor
 q                    salir`
-
