@@ -11,11 +11,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/argon2"
 )
+
+// Mismo contrato que valida la API (schemas.py USERNAME_RE).
+var usernameRE = regexp.MustCompile(`^[a-z0-9_.-]{3,64}$`)
 
 // Parámetros KDF del verifier de cuenta (documentados; el servidor no
 // los necesita: solo recibe el hex final).
@@ -89,10 +93,19 @@ func NewClient(creds Credentials) (*Client, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("sync: URL inválida %q", creds.BaseURL)
 	}
+	user := strings.ToLower(strings.TrimSpace(creds.Username))
+	if !usernameRE.MatchString(user) {
+		return nil, fmt.Errorf(
+			"sync: usuario inválido %q (3-64 caracteres: minúsculas, números, '.', '_', '-')",
+			creds.Username)
+	}
+	if creds.Password == "" {
+		return nil, fmt.Errorf("sync: falta la contraseña de cuenta (STRONGBOXS_SYNC_PASSWORD)")
+	}
 	return &Client{
 		baseURL: url,
 		http:    &http.Client{Timeout: 15 * time.Second},
-		user:    creds.Username,
+		user:    user,
 		pass:    creds.Password,
 	}, nil
 }

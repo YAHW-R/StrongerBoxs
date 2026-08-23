@@ -285,3 +285,16 @@ func TestStartLoopRunsInBackground(t *testing.T) {
 	}
 	t.Fatalf("bucle de fondo no sincronizó: %+v", m.Status())
 }
+
+func TestNewClientNormalizesUsername(t *testing.T) {
+	c, err := NewClient(Credentials{BaseURL: "http://localhost:8000", Username: "TuUsuario", Password: "x-pass-123"})
+	if err != nil {
+		t.Fatalf("normalización falló: %v", err)
+	}
+	if c.user != "tuusuario" {
+		t.Errorf("user = %q", c.user)
+	}
+	if _, err := NewClient(Credentials{BaseURL: "http://l", Username: "ok-user", Password: ""}); err == nil {
+		t.Error("contraseña vacía debería rechazarse")
+	}
+}

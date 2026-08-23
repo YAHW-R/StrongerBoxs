@@ -171,6 +171,10 @@ func (m *Manager) RunOnce(ctx context.Context) (Summary, error) {
 		m.mu.Unlock()
 	}()
 
+	if m.cl == nil {
+		return Summary{}, m.initErr
+	}
+
 	var sum Summary
 
 	// ---- PULL + merge LWW por fecha ----

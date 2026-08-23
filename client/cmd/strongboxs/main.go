@@ -63,23 +63,27 @@ func startSyncIfConfigured(st *store.Store) (context.CancelFunc, bool) {
 	return cancel, true
 }
 
+// runTUI lanza la app: el propio TUI gestiona setup, lock-screen y
+// desbloqueo (por eso la sesión se crea SIN prompt aquí).
 func runTUI() {
+	// Config persistente (~/.config/strongboxs/sync.env); el entorno
+	// exportado en la shell tiene prioridad sobre el archivo.
+	if err := loadEnvFile(envFilePath()); err != nil {
+		fmt.Fprintf(os.Stderr, "strongboxs: aviso env: %v\n", err)
+	}
+
 	st, err := store.Open("")
 	if err != nil {
 		fatal(err)
 	}
 	defer st.Close()
 
-	sess := session.New(st, session.DefaultTTL, nil).WithAuthorizer(authn.Default())
-	if _, err := sess.Ensure(); err != nil { // primer inicio: crea; si no: desbloquea
-		st.Close()
-		fatal(err)
-	}
-	defer sess.Lock()
-
+	// La sincronización trabaja solo con ciphertext: arranca aunque la
+	// bóveda siga bloqueada, sin estorbar al flujo del usuario.
 	cancelSync, _ := startSyncIfConfigured(st)
 	defer cancelSync()
 
+	sess := session.New(st, session.DefaultTTL, nil).WithAuthorizer(authn.Default())
 	p := tea.NewProgram(ui.New(sess, st), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fatal(err)

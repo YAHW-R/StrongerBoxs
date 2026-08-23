@@ -17,6 +17,8 @@ con cifrado AES-256-GCM, sesión estilo *sudo* e interfaz de terminal
 
 ## 2. Compilación e instalación
 
+### Rápida (desarrollo)
+
 ```bash
 cd client
 
@@ -37,6 +39,78 @@ Subcomando adicional:
 
 ```bash
 ./strongboxs passwd     # cambia la contraseña maestra (validando contra Linux)
+```
+
+### Instalación en el sistema (recomendada)
+
+Desde la **raíz del repo**:
+
+```bash
+sudo make install      # binario en /usr/local/bin + lanzador en el menú de apps
+make uninstall         # desinstalar
+```
+
+Tras esto, `strongboxs` funciona desde cualquier terminal y aparece en el
+menú de aplicaciones (se abre en tu terminal por defecto).
+
+## 3. Variables de entorno (config persistente)
+
+No hace falta exportar nada en cada terminal: la app lee automáticamente
+`~/.config/strongboxs/sync.env` (o la ruta que apunte `STRONGBOXS_ENV_FILE`).
+Las variables ya exportadas en la shell tienen **prioridad** sobre el archivo.
+
+```bash
+mkdir -p ~/.config/strongboxs
+cat > ~/.config/strongboxs/sync.env <<'EOF'
+# Sincronización (opcional; sin este bloque la app es 100% local)
+STRONGBOXS_SYNC_URL=http://localhost:8000
+STRONGBOXS_SYNC_USER=tu_usuario        # minúsculas/números/. _ -  (3-64)
+STRONGBOXS_SYNC_PASSWORD=passDeCuenta
+STRONGBOXS_SYNC_INTERVAL_SECS=60       # opcional
+STRONGBOXS_SYNC_DEBUG=1                # opcional: log de ciclos por stdout
+EOF
+chmod 600 ~/.config/strongboxs/sync.env   # contiene una contraseña
+```
+
+| Variable | Significado |
+|---|---|
+| `STRONGBOXS_SYNC_URL` | base de la API; si se omite, modo 100% local |
+| `STRONGBOXS_SYNC_USER` | cuenta de sync (**se normaliza a minúsculas**) |
+| `STRONGBOXS_SYNC_PASSWORD` | contraseña de cuenta (no viaja; solo su derivado Argon2id+SHA256) |
+| `STRONGBOXS_SYNC_INTERVAL_SECS` | segundos entre ciclos (60 por defecto) |
+| `STRONGBOXS_SYNC_DEBUG` | `1` = log de ciclos en stdout |
+| `STRONGBOXS_ENV_FILE` | ruta alternativa del archivo de entorno |
+
+La **contraseña maestra** (descifra tu bóveda local) y la **contraseña de
+cuenta** (autentica contra el servidor) son credenciales distintas.
+
+## Sincronización en segundo plano (opcional)
+
+El cliente sincroniza solo, sin tocar la TUI: cada ciclo hace
+pull→merge→push resolviendo conflictos **por fecha** (gana el `updated_at`
+más nuevo). Funciona incluso con la bóveda bloqueada: viaja ciphertext puro.
+Sin internet, los cambios quedan pendientes (`dirty`) y suben al reconectar.
+
+## Servidor Docker (API + PostgreSQL)
+
+Desde la raíz del repo:
+
+```bash
+make server-up      # docker compose up -d --build  (API :8000)
+make server-logs    # seguir logs de la API
+make server-down    # parar la pila
+cp .env.example .env && $EDITOR .env   # STRONGBOXS_SECRET_KEY en producción
+```
+
+**Arranque automático al boot (opcional)** con systemd:
+
+```bash
+sudo cp -r . /opt/strongboxs                     # o clona ahí el repo
+sudo cp packaging/strongboxs-server.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now strongboxs-server
+systemctl status strongboxs-server               # comprobar
+journalctl -u strongboxs-server -f               # logs
 ```
 
 ## 3. Primer uso
