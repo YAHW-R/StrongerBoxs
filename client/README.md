@@ -1,262 +1,289 @@
-# Strongboxs · Cliente TUI
+# Strongboxs — Manual del cliente TUI
 
-Cliente local de Strongboxs: notas estilo Google Keep y bóveda de contraseñas,
-con cifrado AES-256-GCM, sesión estilo *sudo* e interfaz de terminal
-(BubbleTea) con modos y comandos al estilo Neovim.
+Guía completa de uso de la aplicación de terminal: modos, comandos,
+bóveda con plantillas, búsqueda, sesión y configuración.
+
+> Para requisitos, compilación, stack y visión general del proyecto,
+> consulta el [`README.md` raíz](../README.md).
 
 ---
 
-## 1. Requisitos
+## 1. Filosofía de la interfaz
 
-| Requisito | Notas |
+Strongboxs funciona por **modos**, como Neovim:
+
+```
+NORMAL ── ':' ──▶ COMANDOS (barra ex) ── enter ──▶ ejecutar
+   │
+   ├── '/'  ──▶ BÚSQUEDA incremental (filtra en vivo)
+   ├── tab  ──▶ alterna vistas NOTAS ↔ VAULT
+   └── enter/:e/:new ──▶ EDITOR modal (nota · entrada · plantilla)
+```
+
+- **NORMAL**: navegas la cuadrícula con `j/k`; las teclas no imprimibles
+  disparan acciones; `:` abre la barra de comandos.
+- **COMANDOS**: escribes órdenes tipo ex (`:new web`, `:pin`, `:q`).
+- **BÚSQUEDA**: filtra tarjetas mientras tecleas.
+- **EDITOR**: formulario modal para crear/editar.
+
+La barra inferior siempre indica dónde estás: vista activa (`NOTAS`/`VAULT`),
+resultados de búsqueda (`🔍 "café" 2/5`) y minutos de sesión restantes
+(`🔓 14 min`).
+
+## 2. Primer arranque
+
+1. Ejecuta `strongboxs`. Al no existir bóveda verás **🔑 Primera ejecución**.
+2. Escribe una contraseña maestra (mínimo **8 caracteres**) y confírmala.
+   Esta contraseña descifra tu bóveda local: **nunca sale de tu máquina**.
+3. Entras al tablero NOTAS vacío, con la pista `:new <título>`.
+
+En los siguientes arranques aparecerá la **🔒 lock-screen**: introduce la
+maestra para continuar. Tras **15 minutos** sin actividad la app se
+auto-bloquea sola (cada operación renueva el contador) y todo texto en
+claro se elimina de memoria.
+
+## 3. Navegación (modo NORMAL)
+
+| Tecla | Acción |
 |---|---|
-| Go ≥ 1.26 | compilación sin CGO (binario estático) |
-| Linux | probado en bash/zsh; terminal con soporte truecolor recomendado |
-| `xclip`/`xsel` (X11) o `wl-clipboard` (Wayland) | solo para copiar contraseñas (`y`) |
-| `gcc` + `libpam-dev` | **opcional**, solo si compilas con `-tags pam` |
+| `j` / `k`, `↓` / `↑` | selección abajo/arriba |
+| `g` / `G` | primera / última tarjeta |
+| `tab` | alternar vistas **NOTAS ↔ VAULT** |
+| `enter` o `e` | editar la selección |
+| `v` *(vault)* | revelar valores sensibles en las tarjetas |
+| `y` *(vault)* | copiar el valor secreto al portapapeles |
+| `/` | abrir búsqueda |
+| `?` | overlay de ayuda |
+| `esc` | limpiar búsqueda/avisos |
+| `q` | salir · `ctrl+c` sale siempre |
 
-## 2. Compilación e instalación
+## 4. Barra de comandos (`:`)
 
-### Rápida (desarrollo)
+Pulsa `:`, escribe y `enter`. `esc` cancela.
 
-```bash
-cd client
+### Notas
 
-# dependencias
-go mod download
+| Comando | Acción |
+|---|---|
+| `:new [título]` | crea nota y abre el editor |
+| `:e` | edita la seleccionada |
+| `:d` | borra (soft-delete; se replica al sincronizar) |
+| `:pin` | fija/desfija (📌 sube a la primera) |
+| `:arch` | archiva/restaura (🗄 oculta salvo `:all`) |
+| `:all` | alterna ver archivadas |
+| `:color <nombre>` | `amarillo, verde, azul, rojo, violeta, turquesa, rosa` (también EN) |
 
-# binario por defecto (sin CGO; valida contra el SO vía sudo)
-go build -o strongboxs ./cmd/strongboxs
+### Bóveda (VAULT)
 
-# variante PAM nativo (requiere gcc + libpam-dev)
-go build -tags pam -o strongboxs-pam ./cmd/strongboxs
+| Comando | Acción |
+|---|---|
+| `:new <plantilla>` | nueva entrada con esa plantilla (**sin argumento → `simple`**) |
+| `:e`, `:d` | igual que en notas, sobre la entrada |
+| `:tovault` (`:tv`, `:cifrar`) | convierte la nota seleccionada en entrada cifrada del vault |
 
-# ejecutar
-./strongboxs            # o: go run ./cmd/strongboxs
+### Plantillas
+
+| Comando | Acción |
+|---|---|
+| `:tmpl` | lista plantillas disponibles |
+| `:newp [nombre]` | abre el **constructor** de plantillas |
+| `:deltemplate <nombre>` | borra una plantilla propia |
+
+### Generales
+
+| Comando | Acción |
+|---|---|
+| `:find <texto>` | aplica filtro de búsqueda |
+| `:v [notas\|secretos]` | cambia de vista |
+| `:help` | referencia rápida en pantalla |
+| `:w` | aviso: el guardado es automático y cifrado |
+| `:q` | salir (`:qa`, `:q!` equivalentes) |
+
+## 5. Búsqueda
+
+- `/` abre el filtro; los resultados se reducen **mientras tecleas**
+  (notas: título+cuerpo; vault: título+usuario+url+campos).
+- `enter` aplica y conserva el filtro; `esc` lo limpia del todo.
+- `:find texto` equivale a `/` + texto + enter.
+- La barra muestra coincidencias sobre el total: `🔍 "prod" 3/17`.
+- El cursor navega solo entre resultados; `g/G` también respetan el filtro.
+
+## 6. Editor de notas
+
+Campos: **Título** y **Cuerpo** (multilínea).
+
+| Tecla | Acción |
+|---|---|
+| `tab` / `shift+tab` | campo siguiente/anterior |
+| `ctrl+s` | guardar sin cerrar |
+| `:` + `:w` | ídem (estilo ex) |
+| `:` + `:wq` / `:x` | guardar y cerrar |
+| `:` + `:q!` | cerrar SIN guardar |
+| `esc` | cancelar sin guardar |
+
+Título vacío al guardar ⇒ `(sin título)`. Todo lo guardado se cifra al
+instante en disco: no existe botón "guardar".
+
+## 7. La bóveda (VAULT) y sus plantillas
+
+Cada entrada sigue una **plantilla** que define sus campos. Tarjeta e
+editor se generan desde ella.
+
+### Plantillas incluidas
+
+| Nombre | Icono | Campos |
+|---|---|---|
+| `simple` ⭐ | 🔑 | Usuario · Valor(secreto) — **predeterminada de `:new`** |
+| `web` | 🌐 | URL · Usuario · Contraseña(secreto) · Notas(multi) |
+| `email` | ✉️ | Email · Contraseña(secreto) · Webmail · Notas(multi) |
+| `nota` | 🗒 | Contenido(multi) — usada por `:tovault` |
+
+### Crear entradas
+
+```text
+:new                → simple (usuario + valor)
+:new web            → credencial de página
+:new email          → cuenta de correo
 ```
 
-Subcomando adicional:
+El editor muestra un campo por línea de la plantilla. En campos secretos
+verás `••••••••`: pulsa `ctrl+r` para revelarlos mientras editas (y otra
+vez para volver a tapar).
 
-```bash
-./strongboxs passwd     # cambia la contraseña maestra (validando contra Linux)
+En la cuadrícula, los valores sensibles aparecen como `••••••••` de
+longitud fija (no filtran el tamaño real); `v` los revela solo en pantalla
+y `y` copia el primer valor sensible al portapapeles.
+
+### Tipos de campo admitidos en plantillas propias
+
+| Tipo | Comportamiento |
+|---|---|
+| `Texto` | valor normal visible |
+| `Secreto` | enmascarado en tarjeta, revelable, copiable con `y` |
+| `Configuración` | texto técnico (visible) |
+| `Título` | su valor encabeza la tarjeta de la entrada |
+| `Multilínea` | área de texto (máximo 1 por plantilla) |
+
+### Crear plantillas: `:newp`
+
+`:newp miservidores` abre un formulario seguro (**sin barra de comandos**):
+
+```text
+🧩 NUEVA PLANTILLA
+▸ Nombre interno (para :new)
+  miservidores
+
+▸ Servidor    [Texto]
+  Clave Acceso ‹ Secreto ›      ← ←/→ rota el tipo
+  Puerto     [Configuración]
 ```
 
-### Instalación en el sistema (recomendada)
+| Tecla | Acción |
+|---|---|
+| `tab` / `shift+tab` | recorrer nombre → etiqueta → tipo… |
+| `←` `→` `espacio` | rotar el tipo de la fila enfocada |
+| `enter` | de la etiqueta salta al selector de tipo |
+| `ctrl+n` | añadir campo |
+| `ctrl+d` | borrar el campo actual |
+| `ctrl+s` | crear la plantilla y salir |
+| `esc` | cancelar |
 
-Desde la **raíz del repo**:
+Reglas: etiquetas duplicadas no; un solo campo Multilínea; los espacios de
+la etiqueta pasan a `_` en la clave interna. Creada la plantilla, úsala con
+`:new miservidores`. `:deltemplate miservidores` la elimina (las integradas
+no se pueden borrar).
 
-```bash
-sudo make install      # binario en /usr/local/bin + lanzador en el menú de apps
-make uninstall         # desinstalar
-```
+### Convertir notas en entradas
 
-Tras esto, `strongboxs` funciona desde cualquier terminal y aparece en el
-menú de aplicaciones (se abre en tu terminal por defecto).
+Selecciona una nota y ejecuta `:tovault` (o `:tv`, `:cifrar`): se crea una
+entrada cifrada con plantilla `nota`, la nota original se borra y saltas al
+VAULT con ella seleccionada. Ambos cambios se sincronizan.
 
-## 3. Variables de entorno (config persistente)
+## 8. Sesión estilo sudo
 
-No hace falta exportar nada en cada terminal: la app lee automáticamente
-`~/.config/strongboxs/sync.env` (o la ruta que apunte `STRONGBOXS_ENV_FILE`).
-Las variables ya exportadas en la shell tienen **prioridad** sobre el archivo.
+- Cada operación sensible renueva un temporizador de **15 minutos**.
+- Al expirar: lock-screen automática, wipe de plaintext en memoria y
+  limpieza del campo de contraseña.
+- El indicador `🔓 Xm` de la barra baja muestra el tiempo restante.
+- Cambiar la maestra: `strongboxs passwd` — pide primero tu contraseña del
+  sistema Linux (política sudo/PAM), luego dos veces la nueva. Los datos NO
+  se recifran: solo se re-envuelve la DEK.
+
+## 9. Sincronización en segundo plano
+
+Opcional. Si `STRONGBOXS_SYNC_URL` está definida (ver §10), un motor aparte
+de la TUI hace ciclos `pull → merge → push` cada 60 s **solo si hay red**:
+
+- Conflictos por **fecha**: gana el `updated_at` más nuevo; lo local más
+  nuevo vuelve a subirse en el mismo ciclo.
+- Sin conexión, tus cambios quedan pendientes (`dirty`) y suben solos al
+  reconectar. Nada se pierde ni bloquea la interfaz.
+- Viaja únicamente ciphertext: el motor nunca necesita tu maestra.
+- Con `STRONGBOXS_SYNC_DEBUG=1` verás líneas como
+  `[sync] ok · recibidos=2 aplicados=1 subidos=1`.
+
+## 10. Configuración persistente
+
+La app lee automáticamente `~/.config/strongboxs/sync.env`
+(o `STRONGBOXS_ENV_FILE`). Las variables ya exportadas en la shell tienen
+prioridad sobre el archivo.
 
 ```bash
 mkdir -p ~/.config/strongboxs
 cat > ~/.config/strongboxs/sync.env <<'EOF'
-# Sincronización (opcional; sin este bloque la app es 100% local)
 STRONGBOXS_SYNC_URL=http://localhost:8000
 STRONGBOXS_SYNC_USER=tu_usuario        # minúsculas/números/. _ -  (3-64)
-STRONGBOXS_SYNC_PASSWORD=passDeCuenta
+STRONGBOXS_SYNC_PASSWORD=passDeCuenta  # credencial distinta de la maestra
 STRONGBOXS_SYNC_INTERVAL_SECS=60       # opcional
-STRONGBOXS_SYNC_DEBUG=1                # opcional: log de ciclos por stdout
+STRONGBOXS_SYNC_DEBUG=1                # opcional
 EOF
-chmod 600 ~/.config/strongboxs/sync.env   # contiene una contraseña
+chmod 600 ~/.config/strongboxs/sync.env
 ```
 
-| Variable | Significado |
-|---|---|
-| `STRONGBOXS_SYNC_URL` | base de la API; si se omite, modo 100% local |
-| `STRONGBOXS_SYNC_USER` | cuenta de sync (**se normaliza a minúsculas**) |
-| `STRONGBOXS_SYNC_PASSWORD` | contraseña de cuenta (no viaja; solo su derivado Argon2id+SHA256) |
-| `STRONGBOXS_SYNC_INTERVAL_SECS` | segundos entre ciclos (60 por defecto) |
-| `STRONGBOXS_SYNC_DEBUG` | `1` = log de ciclos en stdout |
-| `STRONGBOXS_ENV_FILE` | ruta alternativa del archivo de entorno |
-
-La **contraseña maestra** (descifra tu bóveda local) y la **contraseña de
-cuenta** (autentica contra el servidor) son credenciales distintas.
-
-## Sincronización en segundo plano (opcional)
-
-El cliente sincroniza solo, sin tocar la TUI: cada ciclo hace
-pull→merge→push resolviendo conflictos **por fecha** (gana el `updated_at`
-más nuevo). Funciona incluso con la bóveda bloqueada: viaja ciphertext puro.
-Sin internet, los cambios quedan pendientes (`dirty`) y suben al reconectar.
-
-## Servidor Docker (API + PostgreSQL)
-
-Desde la raíz del repo:
-
-```bash
-make server-up      # docker compose up -d --build  (API :8000)
-make server-logs    # seguir logs de la API
-make server-down    # parar la pila
-cp .env.example .env && $EDITOR .env   # STRONGBOXS_SECRET_KEY en producción
-```
-
-**Arranque automático al boot (opcional)** con systemd:
-
-```bash
-sudo cp -r . /opt/strongboxs                     # o clona ahí el repo
-sudo cp packaging/strongboxs-server.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now strongboxs-server
-systemctl status strongboxs-server               # comprobar
-journalctl -u strongboxs-server -f               # logs
-```
-
-## 3. Primer uso
-
-1. Al arrancar sin bóveda aparece **🔑 Primera ejecución**:
-   escribe una contraseña maestra (mínimo 8 caracteres) y confírmala.
-2. Se crea la BD local con permisos restrictivos:
-
-   ```
-   $XDG_DATA_HOME/strongboxs/strongboxs.db      # o ~/.local/share/…
-   ```
-
-3. En siguientes arranques aparece la **🔒 lock-screen**: pide la maestra
-   (el campo se enmascara; un fallo limpia el input y muestra el error).
-4. La sesión se **auto-bloquea tras 15 min** de inactividad (TTL renovado
-   por cada operación). Al bloquearse, todo texto en claro sale de memoria.
-
-## 4. Uso diario
-
-### Modos
-
-```
-NORMAL ── ':' ──▶ COMANDOS (ex) ── enter ──▶ ejecutar
-   │
-   ├── '/'  ──▶ BÚSQUEDA incremental (filtrado en vivo)
-   └── enter/e/:e ──▶ EDITOR modal (nota o entrada del vault)
-```
-
-### Comandos (`:` + enter)
-
-| Comando | Efecto |
-|---|---|
-| `:new [título]` | crea nota **o** entrada del vault según la vista |
-| `:e` | edita la selección |
-| `:d` | borra (soft-delete) |
-| `:pin` · `:arch` · `:all` | fijar · archivar · ver archivadas *(notas)* |
-| `:color turquesa` | recolorea *(notas)*; ES/EN: amarillo, verde, azul, rojo, violeta, turquesa, rosa |
-| `:v [notas\|secretos]` | alterna NOTAS ↔ VAULT |
-| `:find <texto>` | aplica filtro |
-| `:help` | referencia completa |
-| `:q` | salir |
-
-En el editor: `:w` guarda, `:wq`/`:x` guarda y cierra, `:q!` cierra sin guardar.
-
-### Teclas
-
-| Tecla | Contexto | Acción |
-|---|---|---|
-| `j/k`, `↑↓`, `g/G` | normal | mover selección |
-| `tab` | normal | NOTAS ↔ VAULT |
-| `/` | normal | búsqueda incremental (`esc` limpia) |
-| `v` | vault | revelar contraseñas en tarjetas |
-| `y` | vault | copiar contraseña al portapapeles |
-| `enter`/`e` | normal | editar selección |
-| `tab`/`shift+tab` | editor | campo siguiente/anterior |
-| `ctrl+s` | editor | guardar |
-| `ctrl+r` | editor vault | revelar contraseña del campo |
-| `?` | normal | ayuda |
-| `q` | normal | salir · `ctrl+c` siempre sale |
-
-La barra inferior muestra el modo, contadores de búsqueda (`🔍 "café" 1/5`)
-y minutos restantes de sesión (`🔓 14 min`).
-
-## 5. Pruebas
-
-### Automáticas
+## 11. Compilación e instalación
 
 ```bash
 cd client
-
-go test ./...                    # suite completa
-go test -race ./internal/ui ./internal/session   # detección de carreras
-go test ./internal/crypto -v     # paquete concreto, verbose
+go build -o strongboxs ./cmd/strongboxs                  # sin CGO
+go build -tags pam -o strongboxs-pam ./cmd/strongboxs    # PAM (gcc+libpam-dev)
+sudo make install                                        # binario+menú (desde raíz)
+./strongboxs passwd                                      # cambio de maestra autorizado
 ```
 
-Qué cubre cada paquete:
+Datos locales: `$XDG_DATA_HOME/strongboxs/strongboxs.db` (0600, WAL).
+Reset total: borra ese archivo (¡pierdes todo!).
 
-| Paquete | Cobertura |
-|---|---|
-| `crypto` | roundtrip AES-GCM, clave errónea, tampering, cambio de maestra sin recifrar |
-| `session` | primer inicio, TTL/auto-lock, reintentos, API programática, autorización SO |
-| `authn` | argumentos de sudo, mapeo de errores, PAM por build tag |
-| `store` | CRUD notas/secretos, soft-delete, flags de sync, meta KV |
-| `ui` | setup/lock, flujos CRUD por comandos, búsqueda, vault completo |
+## 12. Pruebas
 
-### Checklist manual (para validar cada fase)
+Automáticas:
 
 ```bash
-go run ./cmd/strongboxs
+go test ./...                       # suite completa
+go test -race ./internal/ui ./internal/session
+go test ./internal/crypto -v
 ```
 
-1. **Fase 6 · Setup**: crea la maestra; prueba corta (<8) → error; no coinciden → reinicia.
-2. **Fase 7 · Notas**: `:new Compras` → escribe cuerpo → `ctrl+s` → `esc`.
-   Sal con `q`, vuelve a entrar: la nota debe seguir (descifrada tras la maestra).
-3. **Fase 7 · Comandos**: `:pin`, `:arch`, `:all`, `:color rojo`,
-   `:e` + `:wq`. Verifica el overlay `:help`.
-4. **Fase 6 · Lock-screen**: espera el auto-bloqueo (o reduce `DefaultTTL`
-   temporalmente); introduce mal la clave → error y campo limpio.
-5. **Fase 8 · Búsqueda**: `/caf` filtra en vivo; `esc` limpia; `:find texto` equivalente.
-6. **Fase 8 · Vault**: `tab` o `:v s` → `:new Servidor prod` → rellena los
-   5 campos (`ctrl+r` revela) → `:wq` → `v` alterna máscara en tarjetas →
-   `y` copia → `:d` borra.
-7. **Verificación en disco** (opcional):
+Checklist manual sugerido:
 
-   ```bash
-   sqlite3 ~/.local/share/strongboxs/strongboxs.db \
-     "select title,body from notes limit 1;"
-   # → blobs ilegibles (ciphertext), jamás texto claro
-   ```
-8. **Cambio de maestra**: `./strongboxs passwd` → pide contraseña del
-   sistema (política sudo/PAM), la actual y dos veces la nueva.
-   Los datos NO se recifran (solo se re-envuelve la DEK).
+1. Setup: maestra corta → error; no coinciden → reinicio del flujo.
+2. `:new Compras` → escribir → `ctrl+s` → `esc` → salir con `q` y reentrar:
+   la nota sigue ahí tras la lock-screen.
+3. `/caf` filtra en vivo; `esc` limpia; `:find` equivalente.
+4. `:newp banco` → campos `Banco:texto`, `Titular:texto`,
+   `Clave:secreto` → `ctrl+s`; luego `:new banco` y rellenar.
+5. `y` copia · `v` revela · `ctrl+r` en editor.
+6. `:tovault` sobre una nota; verificar que desaparece de NOTAS.
+7. Esperar auto-bloqueo (o bajar `DefaultTTL`) → lock-screen correcta.
+8. `sqlite3 ~/.local/share/strongboxs/strongboxs.db \
+   "select title from notes limit 1;"` → ciphertext ilegible.
 
-### Reset total
-
-```bash
-rm ~/.local/share/strongboxs/strongboxs.db*   # ¡borra TODOS los datos!
-```
-
-## 6. Arquitectura (resumen)
-
-```
-contraseña maestra ─Argon2id(64MiB,t=1,p=4)→ KEK
-DEK aleatoria 256bit ─AES-GCM(KEK)→ envuelta en BD (vault_meta)
-campos sensibles ───AES-GCM(DEK)→ BLOBs ("sb1.<b64>")
-```
-
-```
-client/
-├── cmd/strongboxs/main.go   # entry point + subcomando passwd
-└── internal/
-    ├── authn/               # validación Linux: sudo -S (default) / libpam (-tags pam)
-    ├── crypto/              # bóveda: Create/Open/Lock/ChangePassword/Seal/Unseal
-    ├── session/             # sesión sudo-style: TTL 15min, Ensure/UnlockWith, LockEvents
-    ├── store/               # SQLite sin CGO: notes, secrets, vault_meta
-    └── ui/                  # BubbleTea: modos vim, comandos ex, editores, masonry
-```
-
-Cambiar la maestra solo re-envuelve la DEK; la sesión mantiene la DEK en
-memoria con wipe al bloquear; el borrado es lógico (sync futuro).
-
-## 7. Solución de problemas
+## 13. Solución de problemas
 
 | Síntoma | Causa/solución |
 |---|---|
+| No puedo escribir en un campo | actualiza a esta versión; si persiste, reporta con tu tamaño de terminal |
+| `[sync] servidor 422 … claves no permitidas` | reconstruye el servidor: `docker compose up -d --build` |
 | `portapapeles no disponible` | instala `xclip` (X11) o `wl-clipboard` (Wayland) |
-| `Contraseña del sistema incorrecta` en `passwd` | tu usuario necesita privilegios sudo (esa es la política validada) |
-| Colores apagados | usa una terminal con truecolor (`COLORTERM=truecolor`) |
-| Olvidé la maestra | no hay recuperación (Zero-Knowledge): reset total del punto 5 |
+| `Contraseña del sistema incorrecta` en passwd | tu usuario necesita sudoers (esa política valida Linux) |
+| Colores apagados | terminal sin truecolor (`COLORTERM=truecolor`) |
+| Olvidé la maestra | sin recuperación (ZK): reset total de la BD |
