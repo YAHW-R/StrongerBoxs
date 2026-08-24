@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Strongboxs
+GenericName=Notas y contraseñas
+Comment=Gestor cifrado estilo Keep (TUI)
+Exec=strongboxs
+Terminal=true
+Icon=dialog-password
+Categories=Utility;Security;Office;
+Keywords=notas;contraseñas;passwords;vault;

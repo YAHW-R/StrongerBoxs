@@ -1,0 +1,28 @@
+# Unidad OPCIONAL: arranca la pila Docker de Strongboxs al boot.
+#
+# Instalación:
+#   1) copia este repo a /opt/strongboxs (o ajusta WorkingDirectory)
+#   2) sudo cp packaging/strongboxs-server.service /etc/systemd/system/
+#   3) sudo systemctl daemon-reload
+#   4) sudo systemctl enable --now strongboxs-server
+#
+# Estado/logs:
+#   systemctl status strongboxs-server
+#   journalctl -u strongboxs-server -f
+#   docker compose -f /opt/strongboxs/docker-compose.yml logs -f api
+
+[Unit]
+Description=Strongboxs API (docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/strongboxs
+ExecStart=/usr/bin/docker compose up -d --build --wait
+ExecStop=/usr/bin/docker compose down
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

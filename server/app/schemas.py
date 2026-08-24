@@ -18,12 +18,13 @@ COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 SENSITIVE_FIELDS: dict[str, tuple[str, ...]] = {
     "note": ("title", "body"),
-    "secret": ("title", "username", "password", "notes"),
+    "secret": ("title", "username", "password", "notes", "extra"),
 }
 
 ALLOWED_KEYS: dict[str, set[str]] = {
     "note": {"title", "body", "color", "pinned", "archived"},
-    "secret": {"title", "username", "password", "url", "notes"},
+    "secret": {"title", "username", "password", "url", "notes",
+               "template", "extra"},
 }
 
 
@@ -75,6 +76,10 @@ class ItemIn(BaseModel):
                     raise ValueError(f"'{key}' debe ser cadena")
                 if value and not ENVELOPE_RE.match(value):
                     raise ValueError(f"'{key}' debe ir cifrado (sb1.*) o vacío: Zero-Knowledge")
+            elif key == "template":
+                if not isinstance(value, str) or len(value) > 32 or \
+                   not re.fullmatch(r"[a-z0-9_-]{0,32}", value):
+                    raise ValueError("template inválido (slug ≤32)")
             else:
                 if not isinstance(value, (str, bool, int)) or value is None:
                     raise ValueError(f"metadato '{key}' debe ser escalar")

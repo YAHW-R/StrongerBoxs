@@ -152,3 +152,48 @@ def test_items_isolated_per_user(client):
 
     mine = client.post("/items/pull", headers=auth_headers(t2), json={}).json()["items"]
     assert mine == []
+
+
+def test_secret_template_and_extra_accepted(client):
+    """Las plantillas del cliente viajan como metadato + blob cifrado."""
+    token = register_and_login(client, "tpl-user")
+    uid = sample_item_uuid()
+
+    payload = {
+        "title": "sb1.BANCObanco",
+        "username": "",
+        "password": "sb1.CLAVEclave",
+        "url": "",
+        "notes": "",
+        "template": "banco",
+        "extra": "sb1.EXTRAextra",
+    }
+    r = client.post("/items/push", headers=auth_headers(token), json={
+        "items": [{"item_uuid": uid, "kind": "secret", "payload": payload,
+                   "version": 1, "updated_at": datetime.now(timezone.utc).isoformat()}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["accepted"][0]["status"] == "accepted"
+
+    items = client.post("/items/pull", headers=auth_headers(token), json={}).json()["items"]
+    assert items[0]["payload"]["template"] == "banco"
+    assert items[0]["payload"]["extra"].startswith("sb1.")
+
+
+def test_secret_extra_plaintext_rejected(client):
+    token = register_and_login(client, "tpl-bad")
+    r = client.post("/items/push", headers=auth_headers(token), json={
+        "items": [{"item_uuid": sample_item_uuid(), "kind": "secret",
+                   "payload": {"title": "", "extra": "json-en-claro"},
+                   "version": 1,
+                   "updated_at": datetime.now(timezone.utc).isoformat()}]})
+    assert r.status_code == 422
+
+
+def test_secret_template_invalid_slug_rejected(client):
+    token = register_and_login(client, "tpl-slug")
+    r = client.post("/items/push", headers=auth_headers(token), json={
+        "items": [{"item_uuid": sample_item_uuid(), "kind": "secret",
+                   "payload": {"title": "", "template": "NO VALIDO"},
+                   "version": 1,
+                   "updated_at": datetime.now(timezone.utc).isoformat()}]})
+    assert r.status_code == 422
