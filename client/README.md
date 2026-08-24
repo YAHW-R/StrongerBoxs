@@ -209,18 +209,23 @@ VAULT con ella seleccionada. Ambos cambios se sincronizan.
   sistema Linux (política sudo/PAM), luego dos veces la nueva. Los datos NO
   se recifran: solo se re-envuelve la DEK.
 
-## 9. Sincronización en segundo plano
+## 9. Sincronización por peticiones
 
-Opcional. Si `STRONGBOXS_SYNC_URL` está definida (ver §10), un motor aparte
-de la TUI hace ciclos `pull → merge → push` cada 60 s **solo si hay red**:
+Opcional. Con `STRONGBOXS_SYNC_URL` definida (ver §10), un motor aparte de
+la TUI sincroniza de forma reactiva:
 
-- Conflictos por **fecha**: gana el `updated_at` más nuevo; lo local más
-  nuevo vuelve a subirse en el mismo ciclo.
-- Sin conexión, tus cambios quedan pendientes (`dirty`) y suben solos al
-  reconectar. Nada se pierde ni bloquea la interfaz.
-- Viaja únicamente ciphertext: el motor nunca necesita tu maestra.
-- Con `STRONGBOXS_SYNC_DEBUG=1` verás líneas como
-  `[sync] ok · recibidos=2 aplicados=1 subidos=1`.
+- **PUSH inmediato**: al guardar una nota/entrada (`ctrl+s`, `:w`, `:wq`),
+  crear (`:new`), borrar, fijar, archivar o convertir — los cambios suben
+  solos (agrupando ráfagas con ~1,2 s de debounce). También hay un *flush*
+  final al salir de la app.
+- **PULL solo en el tablero**: mientras tengas el editor o el constructor
+  abierto, el motor NO baja nada del servidor (no pisa lo que estás
+  escribiendo). El pull periódico corre únicamente cuando estás en la vista
+  principal.
+- Conflictos por **fecha**: gana el `updated_at` más nuevo; sin conexión tus
+  cambios quedan pendientes (`dirty`) y suben solos al reconectar.
+- Errores y estado se consultan internamente (Stats del motor); no ensucian
+  la pantalla. Viaja únicamente ciphertext.
 
 ## 10. Configuración persistente
 

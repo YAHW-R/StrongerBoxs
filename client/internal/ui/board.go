@@ -55,6 +55,9 @@ func (m Model) secretCard(s store.Secret, reveal bool) components.Note {
 	if len(lines) == 0 {
 		lines = append(lines, helpStyle.Render("(vacía)"))
 	}
+	// Chip de plantilla: deja claro de qué tipo es la entrada.
+	lines = append(lines, helpStyle.Render("‹"+tpl.Name+"›"))
+
 	return components.Note{
 		Title: titleLine,
 		Body:  strings.Join(lines, "\n"),

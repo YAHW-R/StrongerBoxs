@@ -16,6 +16,7 @@ import (
 	"github.com/yahwr/strongboxs/client/internal/crypto"
 	"github.com/yahwr/strongboxs/client/internal/session"
 	"github.com/yahwr/strongboxs/client/internal/store"
+	"github.com/yahwr/strongboxs/client/internal/sync"
 )
 
 type viewState int
@@ -151,6 +152,9 @@ type Model struct {
 	secrets []store.Secret               // descifradas ídem
 	extraBy map[string]map[string]string // uuid → campos libres descifrados
 
+	syncTrigger func()     // push reactivo tras mutaciones (opcional)
+	gate        *sync.Gate // ocupa/libera el PULL según la UI
+
 	query       string // filtro '/' activo
 	searchFocus bool   // escribiendo en la barra '/'
 	searchLn    textinput.Model
@@ -171,7 +175,18 @@ type Model struct {
 	notice  string
 }
 
-func New(sess *session.Manager, st *store.Store) Model {
+// Opt configura extras del modelo (sincronización reactiva).
+type Opt func(*Model)
+
+// WithSync conecta el push reactivo y la puerta de ocupación del PULL.
+func WithSync(trigger func(), g *sync.Gate) Opt {
+	return func(m *Model) {
+		m.syncTrigger = trigger
+		m.gate = g
+	}
+}
+
+func New(sess *session.Manager, st *store.Store, opts ...Opt) Model {
 	ti := textinput.New()
 	ti.EchoMode = textinput.EchoPassword
 	ti.EchoCharacter = '•'
@@ -193,6 +208,10 @@ func New(sess *session.Manager, st *store.Store) Model {
 		cmdLine:  newCmdInput(64),
 		ed:       newEditorState(),
 		searchLn: sl,
+	}
+
+	for _, o := range opts {
+		o(&m)
 	}
 
 	switch {
@@ -613,6 +632,7 @@ func (m Model) cmdNew(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	m.selectByID(created.ID)
 	m.openEditor(created.ID)
 	return m, textinput.Blink
@@ -637,6 +657,7 @@ func (m Model) secretNew(tplName string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	m.selectByID(created.ID)
 	m.openEditor(created.ID)
 	return m, textinput.Blink
@@ -668,6 +689,7 @@ func (m Model) cmdTovault() (tea.Model, tea.Cmd) {
 	m.selIdx = 0
 	m.refresh()
 	m.selectByID(created.ID)
+	m.requestSync()
 	m.notice = "✓ Nota cifrada en el vault (original borrada)"
 	return m, nil
 }
@@ -764,6 +786,7 @@ func (m Model) cmdDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	return m, nil
 }
 
@@ -783,6 +806,7 @@ func (m Model) cmdTogglePin() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	return m, nil
 }
 
@@ -802,6 +826,7 @@ func (m Model) cmdToggleArch() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	return m, nil
 }
 
@@ -826,6 +851,7 @@ func (m Model) cmdColor(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	return m, nil
 }
 
@@ -1037,6 +1063,20 @@ func (m *Model) moveSel(delta int) {
 // ---- mensajes ----
 
 func (m *Model) setErr(s string) { m.errMsg = s }
+
+// setBusy marca la Gate: con editor/plantilla abiertos el PULL se pausa.
+func (m *Model) setBusy(b bool) {
+	if m.gate != nil {
+		m.gate.Set(b)
+	}
+}
+
+// requestSync dispara un ciclo push reactivo (coalescido en el motor).
+func (m *Model) requestSync() {
+	if m.syncTrigger != nil {
+		m.syncTrigger()
+	}
+}
 
 // ---- autenticación ----
 
@@ -1436,6 +1476,7 @@ func (m Model) saveEditor(close bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	if close {
 		m.closeEditor()
 	}
@@ -1491,6 +1532,7 @@ func (m Model) saveSecret(close bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refresh()
+	m.requestSync()
 	if close {
 		m.closeEditor()
 	}

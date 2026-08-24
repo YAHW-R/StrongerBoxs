@@ -2,9 +2,12 @@ package ui
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/yahwr/strongboxs/client/internal/crypto"
 
 	"github.com/yahwr/strongboxs/client/internal/store"
 )
@@ -209,4 +212,45 @@ func TestVaultToggleAndGuards(t *testing.T) {
 	if m2.board != secSecrets {
 		t.Error("tab debe alternar vista")
 	}
+}
+
+func TestSyncHookFiresOnSave(t *testing.T) {
+	var calls int32
+	m, _ := newTestModel(t)
+	m = New(m.sess, m.st)
+	hook := func() { atomic.AddInt32(&calls, 1) }
+	if _, err := crypto.CreateVault(m.st, testPw); err != nil {
+		t.Fatal(err)
+	}
+	m = New(m.sess, m.st, WithSync(hook, nil))
+	if m.state != viewLocked {
+		t.Fatal("precondición")
+	}
+	m.input.SetValue(testPw)
+	m = pressEnter(m)
+
+	before := atomic.LoadInt32(&calls)
+	m = runCommand(m, "v secretos")
+	m = runCommand(m, "new") // plantilla simple por defecto
+	m.ed.setFieldValue("username", "titular")
+	m.ed.setFieldValue("password", "secreto-123")
+	m = runEditorCmd(m, "wq")
+
+	if atomic.LoadInt32(&calls) <= before {
+		t.Error("el guardado debió disparar el hook de sync")
+	}
+
+	// Título visible en el editor de vault (regresión).
+	m = runCommand(m, "e")
+	found := false
+	for _, l := range strings.Split(m.viewEditor(), "\n") {
+		if strings.Contains(l, "Título") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("la fila 'Título' debe verse en el editor del vault")
+	}
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_ = out
 }

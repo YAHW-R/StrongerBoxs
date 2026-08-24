@@ -6,9 +6,23 @@ import (
 	"fmt"
 	"net"
 	stdsync "sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yahwr/strongboxs/client/internal/store"
+)
+
+// Gate indica al motor si la UI está en un flujo sensible (editor,
+// búsqueda, comandos). Con busy=true se omite el PULL para no pisar
+// lo que el usuario tiene abierto; el PUSH sigue permitido.
+type Gate struct{ v atomic.Bool }
+
+func (g *Gate) Set(busy bool) { g.v.Store(busy) }
+func (g *Gate) Busy() bool    { return g == nil || g.v.Load() }
+
+const (
+	triggerDebounce = 1200 * time.Millisecond
+	defaultInterval = 90 * time.Second
 )
 
 const metaCursorKey = "sync.cursor"
@@ -34,13 +48,18 @@ type Stats struct {
 	CyclesFailed int64
 }
 
-// Manager ejecuta ciclos pull→merge→push en segundo plano.
+// Manager ejecuta ciclos pull→merge→push. Ya NO es un temporizador ciego:
+//   - PUSH: por petición, tras cada guardado/borrado (Trigger con debounce);
+//   - PULL: solo en ciclo completo y SOLO si la Gate está libre.
 type Manager struct {
 	st       *store.Store
 	cl       *Client // nil si la configuración es inválida
 	initErr  error
 	interval time.Duration
 	debug    bool
+
+	gate    *Gate
+	trigger chan struct{}
 
 	mu      stdsync.Mutex
 	syncing bool
@@ -51,7 +70,16 @@ func NewManager(st *store.Store, creds Credentials, interval time.Duration, debu
 	if interval <= 0 {
 		interval = time.Minute
 	}
-	m := &Manager{st: st, interval: interval, debug: debug}
+	if interval <= 0 {
+		interval = defaultInterval
+	}
+	m := &Manager{
+		st:       st,
+		interval: interval,
+		debug:    debug,
+		gate:     &Gate{},
+		trigger:  make(chan struct{}, 1),
+	}
 	cl, err := NewClient(creds)
 	if err != nil {
 		m.initErr = err
@@ -59,6 +87,17 @@ func NewManager(st *store.Store, creds Credentials, interval time.Duration, debu
 	}
 	m.cl = cl
 	return m
+}
+
+// BindGate permite a la UI reportar ocupación (editor abierto…).
+func (m *Manager) BindGate(g *Gate) { m.gate = g }
+
+// Trigger pide un ciclo push inmediato (coalescido): no bloquea nunca.
+func (m *Manager) Trigger() {
+	select {
+	case m.trigger <- struct{}{}:
+	default:
+	}
 }
 
 func (m *Manager) Status() Stats {
@@ -78,7 +117,7 @@ func (m *Manager) Start(ctx context.Context) {
 		case <-time.After(500 * time.Millisecond):
 		}
 		for {
-			m.cycle(ctx)
+			m.cycle(ctx, !m.gate.Busy())
 			if ctx.Err() != nil {
 				return
 			}
@@ -91,7 +130,7 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 }
 
-func (m *Manager) cycle(ctx context.Context) {
+func (m *Manager) cycle(ctx context.Context, allowPull bool) {
 	if m.cl == nil {
 		m.record(m.initErr)
 		return
@@ -106,7 +145,7 @@ func (m *Manager) cycle(ctx context.Context) {
 		}
 	}()
 
-	sum, err := m.RunOnce(ctx)
+	sum, err := m.runCycle(ctx, allowPull)
 	if err != nil {
 		m.record(err)
 		return
@@ -120,11 +159,6 @@ func (m *Manager) cycle(ctx context.Context) {
 	m.stats.CyclesOK++
 	m.stats.InProgress = false
 	m.mu.Unlock()
-
-	if m.debug {
-		fmt.Printf("[sync] ok · recibidos=%d aplicados=%d subidos=%d saltados=%d\n",
-			sum.Pulled, sum.Applied, sum.Pushed, sum.Skipped)
-	}
 }
 
 func (m *Manager) record(err error) {
@@ -135,9 +169,6 @@ func (m *Manager) record(err error) {
 	m.stats.CyclesFailed++
 	m.stats.InProgress = false
 	m.mu.Unlock()
-	if m.debug {
-		fmt.Printf("[sync] error: %v\n", err)
-	}
 }
 
 // online comprueba conectividad TCP real contra el host del servidor.
@@ -153,9 +184,14 @@ func (m *Manager) online() bool {
 	return true
 }
 
-// RunOnce ejecuta un ciclo completo: PULL+merge → cursor → PUSH dirty.
-// Es seguro llamarlo concurrentemente; si ya corre devuelve ErrSyncInProgress.
+// RunOnce ejecuta un ciclo completo (pull+merge → push). Flush manual.
 func (m *Manager) RunOnce(ctx context.Context) (Summary, error) {
+	return m.runCycle(ctx, true)
+}
+
+// runCycle es el corazón: PULL opcional + merge por fecha → PUSH dirty.
+// Es seguro llamarlo concurrentemente; si ya corre devuelve ErrSyncInProgress.
+func (m *Manager) runCycle(ctx context.Context, allowPull bool) (Summary, error) {
 	m.mu.Lock()
 	if m.syncing {
 		m.mu.Unlock()
@@ -177,32 +213,34 @@ func (m *Manager) RunOnce(ctx context.Context) (Summary, error) {
 
 	var sum Summary
 
-	// ---- PULL + merge LWW por fecha ----
-	var since *time.Time
-	if cur, ok, _ := m.st.GetMeta(metaCursorKey); ok {
-		if t, err := time.Parse(time.RFC3339Nano, cur); err == nil {
-			since = &t
+	// ---- PULL (opcional) + merge LWW por fecha ----
+	// Con la Gate ocupada (editor abierto) se omite el pull: el usuario
+	// manda; el push de lo ya guardado sigue.
+	if allowPull {
+		var since *time.Time
+		if cur, ok, _ := m.st.GetMeta(metaCursorKey); ok {
+			if t, err := time.Parse(time.RFC3339Nano, cur); err == nil {
+				since = &t
+			}
 		}
-	}
-	pull, err := m.cl.Pull(ctx, since)
-	if err != nil {
-		return sum, err
-	}
-	sum.Pulled = len(pull.Items)
-	for _, it := range pull.Items {
-		applied, err := mergeItem(m.st, it)
+		pull, err := m.cl.Pull(ctx, since)
 		if err != nil {
 			return sum, err
 		}
-		if applied {
-			sum.Applied++
+		sum.Pulled = len(pull.Items)
+		for _, it := range pull.Items {
+			applied, err := mergeItem(m.st, it)
+			if err != nil {
+				return sum, err
+			}
+			if applied {
+				sum.Applied++
+			}
 		}
-	}
-	// Cursor = reloj del servidor; SOLO se usa para pedir deltas,
-	// jamás para decidir qué contenido gana.
-	cursor := pull.ServerTime.UTC().Format(time.RFC3339Nano)
-	if err := m.st.SetMeta(map[string]string{metaCursorKey: cursor}); err != nil {
-		return sum, err
+		cursor := pull.ServerTime.UTC().Format(time.RFC3339Nano)
+		if err := m.st.SetMeta(map[string]string{metaCursorKey: cursor}); err != nil {
+			return sum, err
+		}
 	}
 
 	// ---- PUSH de todo lo dirty local (incluye tombstones) ----

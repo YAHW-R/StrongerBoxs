@@ -33,15 +33,14 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-// runTUI lanza la app: el propio TUI gestiona setup, lock-screen y desbloqueo.
-// startSyncIfConfigured lanza el motor de sincronización en segundo plano
-// si hay variables de entorno de sync (no interfiere con la TUI).
-func startSyncIfConfigured(st *store.Store) (context.CancelFunc, bool) {
+// startSyncIfConfigured lanza el motor reactivo si hay variables de entorno.
+// Devuelve el manager (Trigger/flush), la Gate de la UI y si está activo.
+func startSyncIfConfigured(st *store.Store) (*sync.Manager, *sync.Gate, bool) {
 	url := os.Getenv("STRONGBOXS_SYNC_URL")
 	if url == "" {
-		return nil, false
+		return nil, nil, false
 	}
-	interval := 60 * time.Second
+	interval := 90 * time.Second
 	if s := os.Getenv("STRONGBOXS_SYNC_INTERVAL_SECS"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
 			interval = time.Duration(n) * time.Second
@@ -57,10 +56,11 @@ func startSyncIfConfigured(st *store.Store) (context.CancelFunc, bool) {
 		interval,
 		os.Getenv("STRONGBOXS_SYNC_DEBUG") != "",
 	)
-	ctx, cancel := context.WithCancel(context.Background())
-	mgr.Start(ctx)
-	fmt.Printf("⟳ Sincronización en segundo plano activa → %s (cada %s)\n", url, interval)
-	return cancel, true
+	gate := &sync.Gate{}
+	mgr.BindGate(gate)
+	mgr.Start(context.Background())
+	fmt.Printf("⟳ Sincronización reactiva → %s (push tras cada guardado · pull cada %s)\n", url, interval)
+	return mgr, gate, true
 }
 
 // runTUI lanza la app: el propio TUI gestiona setup, lock-screen y
@@ -78,15 +78,28 @@ func runTUI() {
 	}
 	defer st.Close()
 
-	// La sincronización trabaja solo con ciphertext: arranca aunque la
-	// bóveda siga bloqueada, sin estorbar al flujo del usuario.
-	cancelSync, _ := startSyncIfConfigured(st)
-	defer cancelSync()
+	// Sync reactiva: push tras cada guardado; pull de fondo solo en tablero.
+	mgr, gate, syncOn := startSyncIfConfigured(st)
 
 	sess := session.New(st, session.DefaultTTL, nil).WithAuthorizer(authn.Default())
-	p := tea.NewProgram(ui.New(sess, st), tea.WithAltScreen())
+
+	var opts []ui.Opt
+	if syncOn {
+		opts = append(opts, ui.WithSync(mgr.Trigger, gate))
+	}
+
+	p := tea.NewProgram(ui.New(sess, st, opts...), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fatal(err)
+	}
+
+	// Flush final al salir: sube lo pendiente aunque la UI ya cerró.
+	if syncOn {
+		fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if sum, err := mgr.RunOnce(fctx); err == nil {
+			fmt.Printf("⟳ Flush final: subidos=%d recibidos=%d\n", sum.Pushed, sum.Pulled)
+		}
 	}
 }
 
