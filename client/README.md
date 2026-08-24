@@ -42,64 +42,42 @@ maestra para continuar. Tras **15 minutos** sin actividad la app se
 auto-bloquea sola (cada operación renueva el contador) y todo texto en
 claro se elimina de memoria.
 
-## 3. Navegación (modo NORMAL)
+## 3. Atajos globales y paleta de comandos
+
+### Atajos directos (tablero)
 
 | Tecla | Acción |
 |---|---|
-| `j` / `k`, `↓` / `↑` | selección abajo/arriba |
-| `g` / `G` | primera / última tarjeta |
+| `ctrl+o` | **nuevo**: nota (en NOTAS) o entrada simple (en VAULT) |
+| `ctrl+e` | editar la selección |
+| `ctrl+s` | sincronizar cambios pendientes ahora |
+| `ctrl+d` | borrar la selección → **pide confirmación** (`y`/`n`) |
 | `tab` | alternar vistas **NOTAS ↔ VAULT** |
-| `enter` o `e` | editar la selección |
-| `v` *(vault)* | revelar valores sensibles en las tarjetas |
-| `y` *(vault)* | copiar el valor secreto al portapapeles |
-| `/` | abrir búsqueda |
-| `?` | overlay de ayuda |
-| `esc` | limpiar búsqueda/avisos |
-| `q` | salir · `ctrl+c` sale siempre |
+| `j` `k` `g` `G` | mover la selección |
+| `/` | búsqueda incremental |
+| `enter` | editar la selección (alias de `ctrl+e`) |
+| `v` / `y` *(vault)* | revelar valores · copiar secreto |
+| `?` | ayuda · `q` salir |
 
-## 4. Barra de comandos (`:`)
+### Paleta de comandos — `ctrl+k`
 
-Pulsa `:`, escribe y `enter`. `esc` cancela.
+Ventana emergente estilo opencode/Claude Code: escribe para filtrar,
+navega con `↑/↓`, ejecuta con `enter`, cierra con `esc`.
 
-### Notas
+Centraliza todos los comandos menos frecuentes, **conscientes del contexto**:
 
-| Comando | Acción |
-|---|---|
-| `:new [título]` | crea nota y abre el editor |
-| `:e` | edita la seleccionada |
-| `:d` | borra (soft-delete; se replica al sincronizar) |
-| `:pin` | fija/desfija (📌 sube a la primera) |
-| `:arch` | archiva/restaura (🗄 oculta salvo `:all`) |
-| `:all` | alterna ver archivadas |
-| `:color <nombre>` | `amarillo, verde, azul, rojo, violeta, turquesa, rosa` (también EN) |
+- En NOTAS: nueva nota, convertir nota a bóveda, colores por nombre
+  (`Color: rojo`…), fijar/archivar, ver archivadas.
+- En VAULT: nueva entrada con cada plantilla (`Nueva entrada: web`,
+  `: email`, tus plantillas propias…), nueva plantilla, copiar valor,
+  listar plantillas.
+- Siempre disponibles: editar/borrar selección, buscar, cambiar de vista,
+  sincronizar ahora, ayuda, salir.
 
-### Bóveda (VAULT)
+Las utilidades clásicas se mantienen: `tab` cambia de vista, `enter`
+edita, `/` busca.
 
-| Comando | Acción |
-|---|---|
-| `:new <plantilla>` | nueva entrada con esa plantilla (**sin argumento → `simple`**) |
-| `:e`, `:d` | igual que en notas, sobre la entrada |
-| `:tovault` (`:tv`, `:cifrar`) | convierte la nota seleccionada en entrada cifrada del vault |
-
-### Plantillas
-
-| Comando | Acción |
-|---|---|
-| `:tmpl` | lista plantillas disponibles |
-| `:newp [nombre]` | abre el **constructor** de plantillas |
-| `:deltemplate <nombre>` | borra una plantilla propia |
-
-### Generales
-
-| Comando | Acción |
-|---|---|
-| `:find <texto>` | aplica filtro de búsqueda |
-| `:v [notas\|secretos]` | cambia de vista |
-| `:help` | referencia rápida en pantalla |
-| `:w` | aviso: el guardado es automático y cifrado |
-| `:q` | salir (`:qa`, `:q!` equivalentes) |
-
-## 5. Búsqueda
+## 4. Búsqueda
 
 - `/` abre el filtro; los resultados se reducen **mientras tecleas**
   (notas: título+cuerpo; vault: título+usuario+url+campos).
@@ -108,7 +86,7 @@ Pulsa `:`, escribe y `enter`. `esc` cancela.
 - La barra muestra coincidencias sobre el total: `🔍 "prod" 3/17`.
 - El cursor navega solo entre resultados; `g/G` también respetan el filtro.
 
-## 6. Editor de notas
+## 5. Editor de notas
 
 Campos: **Título** y **Cuerpo** (multilínea).
 
@@ -124,7 +102,7 @@ Campos: **Título** y **Cuerpo** (multilínea).
 Título vacío al guardar ⇒ `(sin título)`. Todo lo guardado se cifra al
 instante en disco: no existe botón "guardar".
 
-## 7. La bóveda (VAULT) y sus plantillas
+## 6. La bóveda (VAULT) y sus plantillas
 
 Cada entrada sigue una **plantilla** que define sus campos. Tarjeta e
 editor se generan desde ella.
@@ -199,7 +177,7 @@ Selecciona una nota y ejecuta `:tovault` (o `:tv`, `:cifrar`): se crea una
 entrada cifrada con plantilla `nota`, la nota original se borra y saltas al
 VAULT con ella seleccionada. Ambos cambios se sincronizan.
 
-## 8. Sesión estilo sudo
+## 7. Sesión estilo sudo
 
 - Cada operación sensible renueva un temporizador de **15 minutos**.
 - Al expirar: lock-screen automática, wipe de plaintext en memoria y
@@ -209,7 +187,7 @@ VAULT con ella seleccionada. Ambos cambios se sincronizan.
   sistema Linux (política sudo/PAM), luego dos veces la nueva. Los datos NO
   se recifran: solo se re-envuelve la DEK.
 
-## 9. Sincronización por peticiones
+## 8. Sincronización por peticiones
 
 Opcional. Con `STRONGBOXS_SYNC_URL` definida (ver §10), un motor aparte de
 la TUI sincroniza de forma reactiva:
@@ -227,7 +205,7 @@ la TUI sincroniza de forma reactiva:
 - Errores y estado se consultan internamente (Stats del motor); no ensucian
   la pantalla. Viaja únicamente ciphertext.
 
-## 10. Configuración persistente
+## 9. Configuración persistente
 
 La app lee automáticamente `~/.config/strongboxs/sync.env`
 (o `STRONGBOXS_ENV_FILE`). Las variables ya exportadas en la shell tienen
@@ -245,7 +223,7 @@ EOF
 chmod 600 ~/.config/strongboxs/sync.env
 ```
 
-## 11. Compilación e instalación
+## 10. Compilación e instalación
 
 ```bash
 cd client
@@ -258,7 +236,7 @@ sudo make install                                        # binario+menú (desde 
 Datos locales: `$XDG_DATA_HOME/strongboxs/strongboxs.db` (0600, WAL).
 Reset total: borra ese archivo (¡pierdes todo!).
 
-## 12. Pruebas
+## 11. Pruebas
 
 Automáticas:
 
@@ -282,7 +260,7 @@ Checklist manual sugerido:
 8. `sqlite3 ~/.local/share/strongboxs/strongboxs.db \
    "select title from notes limit 1;"` → ciphertext ilegible.
 
-## 13. Solución de problemas
+## 12. Solución de problemas
 
 | Síntoma | Causa/solución |
 |---|---|

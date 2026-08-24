@@ -28,15 +28,11 @@ func unlockedModel(t *testing.T) Model {
 	return m
 }
 
-// runCommand escribe una línea en la barra ':' y pulsa Enter.
+// runCommand ejecuta un comando directamente (la barra ':' del tablero
+// fue sustituida por ctrl+k; los tests usan el dispatcher interno).
 func runCommand(m Model, line string) Model {
-	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
-	m = out.(Model)
-	if !m.cmdFocus {
-		panic("la barra de comandos no se abrió")
-	}
-	m.cmdLine.SetValue(line)
-	return pressEnter(m)
+	out, _ := m.executeCommand(strings.TrimPrefix(strings.TrimSpace(line), ":"))
+	return out.(Model)
 }
 
 func TestCommandCreateEditDeleteFlow(t *testing.T) {
@@ -103,10 +99,15 @@ func TestCommandCreateEditDeleteFlow(t *testing.T) {
 	}
 	m = runCommand(m, "arch") // deshacer
 
-	// :d borra.
+	// :d pide confirmación; 'y' ejecuta.
 	m = runCommand(m, "d")
-	if len(m.notes) != 0 {
-		t.Fatalf("tras :d quedan %d notas", len(m.notes))
+	if !m.confirmOpen {
+		t.Fatal(":d debe abrir confirmación")
+	}
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = out.(Model)
+	if len(m.visibleNotes()) != 0 {
+		t.Fatalf("tras :d quedan %d notas", len(m.visibleNotes()))
 	}
 	rows, _ = m.st.ListNotes(true)
 	if len(rows) != 0 {
@@ -178,19 +179,15 @@ func TestUnknownCommandAndGuards(t *testing.T) {
 
 func TestQuitCommandEmitsQuit(t *testing.T) {
 	m := unlockedModel(t)
-	out, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
-	m2 := out.(Model)
-	m2.cmdLine.SetValue("q")
-	out2, cmd2 := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	_ = out2
-	if cmd2 == nil {
+	out, cmd := m.executeCommand("q")
+	_ = out
+	if cmd == nil {
 		t.Fatal(":q debe devolver comando")
 	}
-	msg := cmd2()
+	msg := cmd()
 	if _, ok := msg.(tea.QuitMsg); !ok {
 		t.Fatalf(":q debe producir tea.QuitMsg; got %T", msg)
 	}
-	_ = cmd
 }
 
 func TestCursorNavigationJK(t *testing.T) {

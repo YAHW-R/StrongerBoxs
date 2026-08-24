@@ -78,11 +78,8 @@ func (m Model) viewBoard() string {
 	}
 
 	status := m.statusLine()
-	switch {
-	case m.searchFocus:
+	if m.searchFocus {
 		status = m.searchLn.View()
-	case m.cmdFocus:
-		status = m.cmdLine.View()
 	}
 
 	lines := []string{
@@ -97,7 +94,53 @@ func (m Model) viewBoard() string {
 	lines = append(lines, "", status)
 
 	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	switch {
+	case m.pal.open:
+		return m.viewPalette()
+	case m.confirmOpen:
+		return overlayDialog(m.viewBoardPlain(), m.confirmDialog())
+	}
+
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, body)
+}
+
+// viewBoardPlain es el tablero sin overlays (para componer diálogos encima).
+func (m Model) viewBoardPlain() string {
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		lipgloss.JoinVertical(lipgloss.Left,
+			boardTitleStyle.Render("Notas"),
+			m.boardGrid(),
+		))
+}
+
+var dialogStyle = lipgloss.NewStyle().
+	Border(lipgloss.DoubleBorder()).
+	BorderForeground(lipgloss.Color("#EA4335")).
+	Padding(1, 3)
+
+func (m Model) confirmDialog() string {
+	what := "nota"
+	if m.confirmIsSec {
+		what = "entrada"
+	}
+	title := ""
+	if it, ok := m.curNote(); ok && !m.confirmIsSec {
+		title = it.Title
+	}
+	if it, ok := m.curSecret(); ok && m.confirmIsSec {
+		title = it.Title
+	}
+	txt := fmt.Sprintf("¿Borrar %s %q?", what, title)
+	return dialogStyle.Render(strings.Join([]string{
+		errStyle.Render(txt),
+		"",
+		helpStyle.Render("y · sí      n/esc · no"),
+	}, "\n"))
+}
+
+func overlayDialog(base, dialog string) string {
+	return lipgloss.JoinVertical(lipgloss.Center, base, "", dialog)
 }
 
 func (m Model) boardGrid() string {

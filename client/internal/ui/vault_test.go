@@ -178,8 +178,13 @@ func TestSecretFullLifecycle(t *testing.T) {
 		t.Errorf("errMsg=%q", m.errMsg)
 	}
 
-	// :d borra la entrada.
+	// :d borra la entrada tras confirmación.
 	m = runCommand(m, "d")
+	if !m.confirmOpen {
+		t.Fatal(":d debe abrir confirmación en el vault")
+	}
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = out.(Model)
 	if m.visibleCount() != 0 {
 		t.Fatalf("tras :d quedan %d entradas", m.visibleCount())
 	}

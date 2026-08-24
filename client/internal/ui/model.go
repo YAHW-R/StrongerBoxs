@@ -164,9 +164,11 @@ type Model struct {
 	showArchived bool
 	showHelp     bool
 
-	cmdFocus bool
-	cmdLine  textinput.Model
-	ed       editorState
+	pal          paletteState // paleta de comandos (ctrl+k)
+	confirmOpen  bool         // diálogo ¿borrar? (y/n)
+	confirmIsSec bool
+
+	ed editorState
 
 	input   textinput.Model // contraseña maestra (setup / lock-screen)
 	setting bool
@@ -205,9 +207,13 @@ func New(sess *session.Manager, st *store.Store, opts ...Opt) Model {
 		sess:     sess,
 		st:       st,
 		input:    ti,
-		cmdLine:  newCmdInput(64),
 		ed:       newEditorState(),
+		pal:      newPalette(),
 		searchLn: sl,
+	}
+
+	for _, o := range opts {
+		o(&m)
 	}
 
 	for _, o := range opts {
@@ -304,10 +310,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.ed.open:
 			return m.handleEditorKey(msg)
+		case m.pal.open:
+			return m.handlePaletteKey(msg)
+		case m.confirmOpen:
+			return m.handleConfirmKey(msg)
 		case m.searchFocus:
 			return m.handleSearchKey(msg)
-		case m.state == viewBoard && m.cmdFocus:
-			return m.handleCmdKey(msg)
 		}
 
 		switch m.state {
@@ -436,12 +444,26 @@ func (m Model) curSecret() (store.Secret, bool) {
 
 func (m Model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case ":":
-		m.errMsg, m.notice = "", ""
-		m.cmdLine.SetValue("")
-		m.cmdFocus = true
-		m.cmdLine.Focus()
+	case "ctrl+k":
+		m.openPalette()
 		return m, textinput.Blink
+
+	case "ctrl+o":
+		if m.board == secSecrets {
+			return m.secretNew("")
+		}
+		return m.cmdNew("")
+
+	case "ctrl+e":
+		return m.cmdEdit()
+
+	case "ctrl+s":
+		m.requestSync()
+		m.notice = "⟳ Sincronizando cambios pendientes…"
+		return m, nil
+
+	case "ctrl+d":
+		return m.askDelete()
 
 	case "/":
 		m.errMsg, m.notice = "", ""
@@ -504,27 +526,6 @@ func (m Model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cmdEdit()
 	}
 	return m, nil
-}
-
-func (m Model) handleCmdKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
-		m.closeCmdBar()
-		return m, nil
-	case tea.KeyEnter:
-		raw := m.cmdLine.Value()
-		m.closeCmdBar()
-		return m.executeCommand(raw)
-	}
-	var cmd tea.Cmd
-	m.cmdLine, cmd = m.cmdLine.Update(msg)
-	return m, cmd
-}
-
-func (m *Model) closeCmdBar() {
-	m.cmdFocus = false
-	m.cmdLine.Blur()
-	m.cmdLine.SetValue("")
 }
 
 // ---- ejecución de comandos ----
@@ -764,19 +765,47 @@ func (m Model) cmdEdit() (tea.Model, tea.Cmd) {
 	return m, textinput.Blink
 }
 
-func (m Model) cmdDelete() (tea.Model, tea.Cmd) {
+// askDelete abre el diálogo de confirmación (ctrl+d / paleta).
+func (m Model) askDelete() (tea.Model, tea.Cmd) {
+	if m.visibleCount() == 0 {
+		m.setErr("Nada que borrar")
+		return m, nil
+	}
+	if _, ok := m.curSecret(); ok {
+		m.confirmIsSec = true
+	} else if _, ok := m.curNote(); ok {
+		m.confirmIsSec = false
+	} else {
+		m.setErr("Selecciona un elemento con j/k")
+		return m, nil
+	}
+	m.confirmOpen = true
+	return m, nil
+}
+
+func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch strings.ToLower(msg.String()) {
+	case "y":
+		m.confirmOpen = false
+		return m.performDelete()
+	case "n", "esc":
+		m.confirmOpen = false
+		return m, nil
+	}
+	return m, nil // cualquier otra tecla se ignora dentro del diálogo
+}
+
+func (m Model) performDelete() (tea.Model, tea.Cmd) {
 	var err error
-	if m.board == secSecrets {
+	if m.confirmIsSec {
 		s, ok := m.curSecret()
 		if !ok {
-			m.setErr("Selecciona una entrada con j/k")
 			return m, nil
 		}
 		err = m.st.SoftDeleteSecret(s.ID)
 	} else {
 		n, ok := m.curNote()
 		if !ok {
-			m.setErr("Selecciona una nota con j/k")
 			return m, nil
 		}
 		err = m.st.SoftDeleteNote(n.ID)
@@ -787,7 +816,12 @@ func (m Model) cmdDelete() (tea.Model, tea.Cmd) {
 	}
 	m.refresh()
 	m.requestSync()
+	m.notice = "✓ Eliminado"
 	return m, nil
+}
+
+func (m Model) cmdDelete() (tea.Model, tea.Cmd) {
+	return m.askDelete()
 }
 
 func (m Model) cmdTogglePin() (tea.Model, tea.Cmd) {
@@ -1149,7 +1183,8 @@ func (m *Model) enterLocked() {
 	m.firstPw = ""
 	m.errMsg, m.notice = "", ""
 	m.revealAll = false
-	m.closeCmdBar()
+	m.pal.open = false
+	m.confirmOpen = false
 	m.closeEditor()
 	m.clearSearch()
 	m.showHelp = false
@@ -1677,8 +1712,6 @@ func (m Model) statusLine() string {
 	switch {
 	case m.searchFocus:
 		return helpStyle.Render("enter · aplicar    esc · limpiar")
-	case m.cmdFocus:
-		return helpStyle.Render("enter · ejecutar    esc · cancelar")
 	}
 
 	label := "NOTAS"
@@ -1701,5 +1734,6 @@ func (m Model) statusLine() string {
 	}
 	mins := int((d + time.Minute - 1) / time.Minute) // techo
 	parts = append(parts, fmt.Sprintf("🔓 %d min", mins))
+	parts = append(parts, "ctrl+k comandos · ctrl+o nuevo · q salir")
 	return joinStatus(parts)
 }

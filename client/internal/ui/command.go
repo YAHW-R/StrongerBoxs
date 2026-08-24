@@ -44,32 +44,21 @@ func colorNamesList() string {
 	return strings.Join(names, ", ")
 }
 
-const helpText = `Comandos de Strongboxs (estilo ex):
+const helpText = `Atajos globales (tablero):
 
-:new [título]        crea nota (o entrada de vault según la vista)
-:e | :edit           edita la selección
-:d | :del            borra la selección (soft-delete)
-:pin | :arch | :all  fijar · archivar · ver archivadas (notas)
-:color <nombre>      amarillo, verde, azul, rojo, violeta, turquesa, rosa
-:v [notas|secretos]  alterna entre NOTAS y VAULT (tab)
-:find <texto>        aplica filtro ('/' lo abre en vivo)
-:tovault | :tv       cifra la nota seleccionada hacia el VAULT
-:newp [nombre]       constructor de plantillas (campo:tipo por línea)
-:new <plantilla>     nueva entrada con esa plantilla (:new = simple)
-:tmpl                lista plantillas · :deltemplate <nombre> borra una
-Plantillas incluidas: simple (usuario+valor), web, email, nota
-:help                esta ayuda
+ctrl+o                nuevo (nota o entrada según la vista)
+ctrl+e                editar la selección
+ctrl+s                sincronizar cambios pendientes
+ctrl+d                borrar con confirmación
+tab                   NOTAS ↔ VAULT
+/                     búsqueda incremental · esc limpia
+v / y                 revelar valores / copiar secreto (vault)
+j k g G               mover la selección
+?                     esta ayuda · q salir
 
-Dentro del editor:
-:w                   guarda sin cerrar
-:wq | :x             guarda y cierra
-:q | :q!             cierra sin guardar
+Paleta de comandos (ctrl+k): buscar y ejecutar todo lo demás:
+crear desde plantillas (:new web/email/nota/mipropia), nueva plantilla,
+colores, fijar/archivar/archivadas, convertir nota a vault, salir…
 
-Teclas del tablero:
-j/k, g/G             mover la selección
-/                    búsqueda incremental (esc limpia)
-tab                  alterna NOTAS ↔ VAULT
-v                    revela contraseñas en las tarjetas (vault)
-y                    copia la contraseña seleccionada al portapapeles
-ctrl+r               revela la contraseña en el editor
-q                    salir`
+Editor: tab campos · ctrl+s guardar · :w :wq :x :q! · esc cancelar
+En el vault: ctrl+r revela la contraseña mientras editas.`
