@@ -99,7 +99,7 @@ sudo pacman -S go make git python docker docker-compose sqlite xclip
 ### 1) Compilar y verificar
 
 ```bash
-git clone https://github.com/YAHW-R/StrongerBoxs.git strongboxs && cd strongboxs
+git clone https://github.com/YAHW-R/StrongerBoxs.git && cd strongboxs
 make build          # cliente → client/bin/strongboxs
 make server-venv    # entorno Python del servidor
 make test           # suite completa: Go + pytest
