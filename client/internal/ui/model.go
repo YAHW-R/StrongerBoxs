@@ -1526,6 +1526,12 @@ func (m Model) saveSecret(close bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// El título vive en su propio input (índice 0 del editor).
+	target.Title = m.ed.title.Value()
+	if strings.TrimSpace(target.Title) == "" {
+		target.Title = "(sin título)"
+	}
+
 	target.Template = m.ed.tplName
 	extra := map[string]string{}
 	for _, f := range m.ed.secFields {

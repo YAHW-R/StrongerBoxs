@@ -143,11 +143,13 @@ func (m Model) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.pal.cursor > 0 {
 			m.pal.cursor--
 		}
+		m.pal.offset = clampOffset(m.pal.cursor, m.pal.offset, len(m.pal.items))
 		return m, nil
 	case tea.KeyDown:
 		if m.pal.cursor < len(m.pal.items)-1 {
 			m.pal.cursor++
 		}
+		m.pal.offset = clampOffset(m.pal.cursor, m.pal.offset, len(m.pal.items))
 		return m, nil
 	case tea.KeyEnter:
 		if len(m.pal.items) == 0 {
@@ -170,16 +172,21 @@ func (m Model) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// clampOffset mantiene el cursor dentro de la ventana visible de la lista.
 func clampOffset(cur, off, n int) int {
 	vis := min(paletteVisible, n)
 	if cur < off {
-		return cur
+		off = cur
 	}
 	if cur >= off+vis {
-		return cur - vis + 1
+		off = cur - vis + 1
 	}
-	if off > max(0, n-vis) {
-		return max(0, n-vis)
+	maxOff := max(0, n-vis)
+	if off > maxOff {
+		off = maxOff
+	}
+	if off < 0 {
+		off = 0
 	}
 	return off
 }

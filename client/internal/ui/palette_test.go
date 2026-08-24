@@ -153,3 +153,42 @@ func TestBoardColonBarRemoved(t *testing.T) {
 		t.Error("':' no debe abrir la paleta")
 	}
 }
+
+func TestPaletteScrollFollowsCursor(t *testing.T) {
+	m := unlockedModel(t)
+	m = runCommand(m, "v secretos")
+
+	m = pressCtrl(m, tea.KeyCtrlK)
+	total := len(m.pal.items)
+	if total <= paletteVisible {
+		t.Skipf("se necesitan >%d comandos para probar scroll; hay %d", paletteVisible, total)
+	}
+
+	// Bajar hasta el último: el render debe mostrar SIEMPRE el ítem del cursor.
+	for i := 0; i < total-1; i++ {
+		out, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = out.(Model)
+	}
+	view := m.viewPalette()
+	want := m.pal.items[m.pal.cursor].label
+	if !strings.Contains(view, want) {
+		t.Fatalf("el último ítem %q no aparece en pantalla tras scrollear", want)
+	}
+	if m.pal.offset != total-paletteVisible {
+		t.Fatalf("offset=%d, quiero %d", m.pal.offset, total-paletteVisible)
+	}
+
+	// Y subir hasta el primero de nuevo.
+	for i := 0; i < total-1; i++ {
+		out, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		m = out.(Model)
+	}
+	view = m.viewPalette()
+	first := m.pal.items[0].label
+	if !strings.Contains(view, first) {
+		t.Fatalf("el primer ítem %q no reaparece al volver arriba", first)
+	}
+	if m.pal.offset != 0 {
+		t.Fatalf("offset=%d, quiero 0", m.pal.offset)
+	}
+}

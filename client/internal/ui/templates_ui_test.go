@@ -86,8 +86,24 @@ func TestNewDefaultsToSimpleTemplate(t *testing.T) {
 	if s.Template != "simple" || s.Username != "pepe" || s.Password != "valor-secreto-99" {
 		t.Fatalf("entrada simple mal guardada: %+v", s)
 	}
+	if s.Title != "mi credencial" {
+		t.Errorf("título no persistido: %q", s.Title)
+	}
 	if s.Extra != "" {
 		t.Errorf("simple no debe tener extra; got %q", s.Extra)
+	}
+
+	// REGRESIÓN: reabrir la app (bloquear sesión → nuevo modelo → unlock)
+	// debe mostrar el título descifrado.
+	m.sess.Lock()
+	m2 := New(m.sess, m.st)
+	if m2.state != viewLocked {
+		t.Fatalf("precondición lock: %d", m2.state)
+	}
+	m2.input.SetValue(testPw)
+	m2 = pressEnter(m2)
+	if len(m2.secrets) == 0 || m2.secrets[0].Title != "mi credencial" {
+		t.Fatalf("título tras reiniciar: %+v", m2.secrets)
 	}
 }
 
