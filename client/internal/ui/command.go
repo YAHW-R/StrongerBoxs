@@ -53,6 +53,11 @@ const helpText = `Comandos de Strongboxs (estilo ex):
 :color <nombre>      amarillo, verde, azul, rojo, violeta, turquesa, rosa
 :v [notas|secretos]  alterna entre NOTAS y VAULT (tab)
 :find <texto>        aplica filtro ('/' lo abre en vivo)
+:tovault | :tv       cifra la nota seleccionada hacia el VAULT
+:newp [nombre]       constructor de plantillas (campo:tipo por línea)
+:new <plantilla>     nueva entrada con esa plantilla (:new = simple)
+:tmpl                lista plantillas · :deltemplate <nombre> borra una
+Plantillas incluidas: simple (usuario+valor), web, email, nota
 :help                esta ayuda
 
 Dentro del editor:

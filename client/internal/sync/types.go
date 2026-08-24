@@ -18,6 +18,9 @@ import "time"
 // kind gracias a omitempty (el servidor rechaza claves ajenas a cada tipo).
 type ItemPayload struct {
 	Title    string `json:"title"`
+	Template string `json:"template,omitempty"` // plantilla del vault (meta)
+	Extra    string `json:"extra,omitempty"`    // JSON cifrado de campos libres
+
 	Body     string `json:"body,omitempty"`
 	Color    string `json:"color,omitempty"`
 	Pinned   bool   `json:"pinned,omitempty"`

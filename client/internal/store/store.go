@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS vault_meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+-- Plantillas personalizadas del vault.
+CREATE TABLE IF NOT EXISTS templates (
+	name        TEXT PRIMARY KEY,
+	title       TEXT NOT NULL,
+	icon        TEXT NOT NULL DEFAULT '',
+	fields_json TEXT NOT NULL DEFAULT '[]'
+);
 `
 
 // Store encapsula el acceso a la BD local.
@@ -100,12 +108,14 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: migrar esquema: %w", err)
 	}
+	s := &Store{db: db}
+	s.migrate() // columnas añadidas en versiones posteriores
 	// La BD contendrá ciphertext: permisos restrictivos.
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: chmod bd: %w", err)
 	}
-	return &Store{db: db}, nil
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -264,9 +274,10 @@ func (s *Store) CreateSecret(sc Secret) (Secret, error) {
 	sc.Dirty = true
 	sc.CreatedAt, sc.UpdatedAt = nowUTC(), nowUTC()
 	res, err := s.db.Exec(`
-		INSERT INTO secrets (uuid, title, username, password, url, notes, version, dirty, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sc.UUID, sc.Title, sc.Username, sc.Password, sc.URL, sc.Notes,
+		INSERT INTO secrets (uuid, template, title, username, password, url, notes, extra,
+		                     version, dirty, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sc.UUID, sc.Template, sc.Title, sc.Username, sc.Password, sc.URL, sc.Notes, sc.Extra,
 		sc.Version, boolToInt(sc.Dirty),
 		sc.CreatedAt.Format(time.RFC3339Nano), sc.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
@@ -276,15 +287,15 @@ func (s *Store) CreateSecret(sc Secret) (Secret, error) {
 	return sc, err
 }
 
-const secretCols = `id, uuid, title, username, password, url, notes, version, dirty, created_at, updated_at, deleted_at`
+const secretCols = `id, uuid, template, title, username, password, url, notes, extra, version, dirty, created_at, updated_at, deleted_at`
 
 func scanSecret(row interface{ Scan(...any) error }) (Secret, error) {
 	var sc Secret
 	var dirty int
 	var createdAt, updatedAt string
 	var deletedAt sql.NullString
-	err := row.Scan(&sc.ID, &sc.UUID, &sc.Title, &sc.Username, &sc.Password,
-		&sc.URL, &sc.Notes, &sc.Version, &dirty, &createdAt, &updatedAt, &deletedAt)
+	err := row.Scan(&sc.ID, &sc.UUID, &sc.Template, &sc.Title, &sc.Username, &sc.Password,
+		&sc.URL, &sc.Notes, &sc.Extra, &sc.Version, &dirty, &createdAt, &updatedAt, &deletedAt)
 	if err != nil {
 		return Secret{}, err
 	}
@@ -330,10 +341,10 @@ func (s *Store) UpdateSecret(sc *Secret) error {
 	sc.Dirty = true
 	sc.UpdatedAt = nowUTC()
 	res, err := s.db.Exec(`
-		UPDATE secrets SET title=?, username=?, password=?, url=?, notes=?,
+		UPDATE secrets SET template=?, title=?, username=?, password=?, url=?, notes=?, extra=?,
 		                   version=?, dirty=1, updated_at=?
 		WHERE id=?`,
-		sc.Title, sc.Username, sc.Password, sc.URL, sc.Notes,
+		sc.Template, sc.Title, sc.Username, sc.Password, sc.URL, sc.Notes, sc.Extra,
 		sc.Version, sc.UpdatedAt.Format(time.RFC3339Nano), sc.ID)
 	if err != nil {
 		return fmt.Errorf("store: actualizar secreto %d: %w", sc.ID, err)

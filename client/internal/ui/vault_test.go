@@ -91,24 +91,27 @@ func TestSecretFullLifecycle(t *testing.T) {
 		t.Fatalf("vista vault: board=%v count=%d", m.board, m.visibleCount())
 	}
 
-	// :new crea entrada y abre editor de secretos.
-	m = runCommand(m, "new Servidor prod")
-	if !m.ed.open || m.ed.sec != secSecrets {
-		t.Fatalf("editor secreto: open=%v sec=%v", m.ed.open, m.ed.sec)
+	// :new <plantilla>: "web" trae url/usuario/contraseña/notas.
+	m = runCommand(m, "new web")
+	if !m.ed.open || m.ed.sec != secSecrets || m.ed.tplName != "web" {
+		t.Fatalf("editor web: open=%v sec=%v tpl=%q", m.ed.open, m.ed.sec, m.ed.tplName)
 	}
-
-	// Rellenar campos navegando con tab: título ya está.
-	m.ed.user.SetValue("admin")
-	m.ed.pass.SetValue("S3cr3t-ñ-123")
-	m.ed.url.SetValue("ssh://10.0.0.1")
-	m.ed.body.SetValue("clave rotada cada 90 días")
+	if len(m.ed.secFields) != 4 {
+		t.Fatalf("campos de 'web': %d", len(m.ed.secFields))
+	}
+	m.ed.title.SetValue("Servidor prod")
+	m.ed.setFieldValue("username", "admin")
+	m.ed.setFieldValue("password", "S3cr3t-ñ-123")
+	m.ed.setFieldValue("url", "ssh://10.0.0.1")
+	m.ed.setFieldValue("notes", "clave rotada cada 90 días")
 	m = runEditorCmd(m, "wq")
 
 	if m.ed.open || m.visibleCount() != 1 {
 		t.Fatalf("tras :wq: open=%v count=%d", m.ed.open, m.visibleCount())
 	}
 	s := m.secrets[0]
-	if s.Username != "admin" || s.Password != "S3cr3t-ñ-123" || s.URL != "ssh://10.0.0.1" {
+	if s.Template != "web" || s.Username != "admin" ||
+		s.Password != "S3cr3t-ñ-123" || s.URL != "ssh://10.0.0.1" {
 		t.Fatalf("entidad descifrada incorrecta: %+v", s)
 	}
 
@@ -127,11 +130,11 @@ func TestSecretFullLifecycle(t *testing.T) {
 	}
 
 	// Tarjeta: contraseña enmascarada por defecto; 'v' la revela solo en pantalla.
-	cardMasked := secretCard(s, false).Body
+	cardMasked := m.secretCard(s, false).Body
 	if strings.Contains(cardMasked, "S3cr3t") || !strings.Contains(cardMasked, maskText) {
 		t.Fatalf("tarjeta debe enmascarar: %q", cardMasked)
 	}
-	cardReveal := secretCard(s, true).Body
+	cardReveal := m.secretCard(s, true).Body
 	if !strings.Contains(cardReveal, "S3cr3t-ñ-123") {
 		t.Fatalf("reveal debe mostrar la contraseña: %q", cardReveal)
 	}
@@ -160,7 +163,7 @@ func TestSecretFullLifecycle(t *testing.T) {
 
 	// Editar: cambiar usuario y guardar.
 	m = runCommand(m, "e")
-	m.ed.user.SetValue("root")
+	m.ed.setFieldValue("username", "root")
 	m = runEditorCmd(m, ":x")
 	if m.secrets[0].Username != "root" {
 		t.Fatalf("edición no guardada: %q", m.secrets[0].Username)

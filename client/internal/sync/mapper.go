@@ -33,6 +33,8 @@ func secretToItem(s store.Secret) ItemIn {
 		Kind:     KindSecret,
 		Payload: ItemPayload{
 			Title:    s.Title,
+			Template: s.Template,
+			Extra:    s.Extra,
 			Username: s.Username,
 			Password: s.Password,
 			URL:      s.URL,
@@ -72,6 +74,8 @@ func remoteToSecret(it ItemOut) store.Secret {
 	}
 	return store.Secret{
 		UUID:      it.ItemUUID,
+		Template:  it.Payload.Template,
+		Extra:     it.Payload.Extra,
 		Title:     it.Payload.Title,
 		Username:  it.Payload.Username,
 		Password:  it.Payload.Password,

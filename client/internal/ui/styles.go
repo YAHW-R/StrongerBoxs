@@ -36,3 +36,7 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("666666"))
 )
+
+var selectedStyle = lipgloss.NewStyle().
+	Reverse(true).
+	Bold(true)

@@ -21,14 +21,19 @@ type Note struct {
 
 // Secret es una entrada de contraseña. Todos los campos sensibles van
 // como BLOB para almacenar ciphertext (Zero-Knowledge: nunca en claro).
+//
+// Template identifica la plantilla que definió los campos; Extra es un
+// JSON cifrado {clave:valor} con los campos NO estándar de esa plantilla.
 type Secret struct {
 	ID        int64
 	UUID      string
+	Template  string
 	Title     string
 	Username  string
 	Password  string
 	URL       string
 	Notes     string
+	Extra     string // sobre "sb1.*" de un JSON map[string]string
 	Version   int64
 	Dirty     bool
 	CreatedAt time.Time

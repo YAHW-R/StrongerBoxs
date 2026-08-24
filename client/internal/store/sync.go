@@ -54,21 +54,23 @@ func (s *Store) UpsertRemoteNote(n Note) (bool, error) {
 // UpsertRemoteSecret es el equivalente para entradas de contraseñas.
 func (s *Store) UpsertRemoteSecret(sc Secret) (bool, error) {
 	res, err := s.db.Exec(`
-		INSERT INTO secrets (uuid, title, username, password, url, notes,
+		INSERT INTO secrets (uuid, template, title, username, password, url, notes, extra,
 		                     version, dirty, created_at, updated_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
 		ON CONFLICT(uuid) DO UPDATE SET
+			template   = excluded.template,
 			title      = excluded.title,
 			username   = excluded.username,
 			password   = excluded.password,
 			url        = excluded.url,
 			notes      = excluded.notes,
+			extra      = excluded.extra,
 			version    = excluded.version,
 			dirty      = 0,
 			updated_at = excluded.updated_at,
 			deleted_at = excluded.deleted_at
 		WHERE excluded.updated_at > secrets.updated_at`,
-		sc.UUID, sc.Title, sc.Username, sc.Password, sc.URL, sc.Notes,
+		sc.UUID, sc.Template, sc.Title, sc.Username, sc.Password, sc.URL, sc.Notes, sc.Extra,
 		sc.Version, fmtTime(sc.CreatedAt), fmtTime(sc.UpdatedAt), fmtTimePtr(sc.DeletedAt))
 	if err != nil {
 		return false, fmt.Errorf("store: upsert secreto remoto %s: %w", sc.UUID, err)

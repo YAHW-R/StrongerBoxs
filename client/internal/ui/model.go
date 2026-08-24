@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,7 +44,13 @@ type (
 	tickMsg      time.Time
 )
 
-// editorState es el modal de creación/edición de notas y secretos.
+// secFieldInput es un campo dinámico del editor de vault.
+type secFieldInput struct {
+	def   fieldDef
+	input textinput.Model
+}
+
+// editorState es el modal de creación/edición de notas, secretos y plantillas.
 type editorState struct {
 	open bool
 	sec  boardView
@@ -51,47 +58,67 @@ type editorState struct {
 
 	title textinput.Model
 	body  textarea.Model
+	field int // índice sobre la lista activa (nota o campos de secreto)
 
-	user   textinput.Model
-	pass   textinput.Model
-	url    textinput.Model
-	field  int  // nota: 0..1 · secreto: 0..4
-	reveal bool // mostrar contraseña en claro mientras se edita
+	secFields []secFieldInput   // vault: campos según la plantilla
+	tplName   string            // plantilla asociada a la entrada abierta
+	extraVals map[string]string // valores descifrados de campos libres
+
+	building bool        // modo :newp (constructor de plantillas)
+	builder  *tplBuilder // formulario del constructor (nil fuera de él)
+	reveal   bool        // mostrar campos sensibles en claro mientras se edita
 
 	cmd   bool
 	cmdLn textinput.Model
 }
 
-func newEditorInputs() (textinput.Model, textarea.Model, textinput.Model, textinput.Model, textinput.Model, textinput.Model) {
-	t := textinput.New()
-	t.Placeholder = "Título"
-	t.CharLimit = 120
-	t.Width = 38
+// setFieldValue localiza un campo por clave y le asigna valor.
+func (e *editorState) setFieldValue(key, val string) bool {
+	for i := range e.secFields {
+		if e.secFields[i].def.Key == key {
+			if e.secFields[i].def.Multi {
+				e.body.SetValue(val)
+				return true
+			}
+			e.secFields[i].input.SetValue(val)
+			return true
+		}
+	}
+	return false
+}
 
+func (e *editorState) fieldValue(key string) string {
+	for _, f := range e.secFields {
+		if f.def.Key != key {
+			continue
+		}
+		if f.def.Multi {
+			return e.body.Value()
+		}
+		return f.input.Value()
+	}
+	return ""
+}
+
+func newTextInput(placeholder string, sensitive bool) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.CharLimit = 256
+	ti.Width = 38
+	if sensitive {
+		ti.EchoMode = textinput.EchoPassword
+		ti.EchoCharacter = '•'
+	}
+	return ti
+}
+
+func newBodyArea() textarea.Model {
 	b := textarea.New()
-	b.Placeholder = "Escribe tu nota…"
+	b.Placeholder = "Escribe aquí…"
 	b.SetHeight(7)
 	b.SetWidth(44)
 	b.ShowLineNumbers = false
-
-	u := textinput.New()
-	u.Placeholder = "Usuario"
-	u.CharLimit = 128
-	u.Width = 38
-
-	p := textinput.New()
-	p.Placeholder = "Contraseña"
-	p.CharLimit = 256
-	p.Width = 38
-	p.EchoMode = textinput.EchoPassword
-	p.EchoCharacter = '•'
-
-	url := textinput.New()
-	url.Placeholder = "https://…"
-	url.CharLimit = 256
-	url.Width = 38
-
-	return t, b, u, p, url, newCmdInput(32)
+	return b
 }
 
 func newCmdInput(limit int) textinput.Model {
@@ -103,8 +130,12 @@ func newCmdInput(limit int) textinput.Model {
 }
 
 func newEditorState() editorState {
-	t, b, u, p, url, c := newEditorInputs()
-	return editorState{title: t, body: b, user: u, pass: p, url: url, cmdLn: c}
+	return editorState{
+		title:     newTextInput("Título", false),
+		body:      newBodyArea(),
+		extraVals: map[string]string{},
+		cmdLn:     newCmdInput(32),
+	}
 }
 
 // Model es el estado raíz de la app BubbleTea.
@@ -116,8 +147,9 @@ type Model struct {
 	board         boardView
 	width, height int
 
-	notes   []store.Note   // descifradas SOLO con sesión viva
-	secrets []store.Secret // descifradas ídem
+	notes   []store.Note                 // descifradas SOLO con sesión viva
+	secrets []store.Secret               // descifradas ídem
+	extraBy map[string]map[string]string // uuid → campos libres descifrados
 
 	query       string // filtro '/' activo
 	searchFocus bool   // escribiendo en la barra '/'
@@ -195,10 +227,43 @@ func countdownTick() tea.Cmd {
 	return tea.Tick(countdownEvery, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// applyResponsiveSizes adapta los widgets del editor al tamaño real de la
+// ventana (anchos fijos se salían por los bordes en terminales pequeñas).
+func (m *Model) applyResponsiveSizes() {
+	w := m.width - 18
+	switch {
+	case w < 14:
+		w = 14
+	case w > 48:
+		w = 48
+	}
+	h := m.height - 20
+	switch {
+	case h < 3:
+		h = 3
+	case h > 10:
+		h = 10
+	}
+
+	m.ed.title.Width = w
+	m.ed.body.SetWidth(w + 4)
+	m.ed.body.SetHeight(h)
+	for i := range m.ed.secFields {
+		m.ed.secFields[i].input.Width = w
+	}
+	if b := m.ed.builder; b != nil {
+		b.name.Width = w
+		for i := range b.rows {
+			b.rows[i].label.Width = w
+		}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.applyResponsiveSizes()
 		return m, nil
 
 	case lockEventMsg:
@@ -480,6 +545,14 @@ func (m Model) executeCommand(raw string) (tea.Model, tea.Cmd) {
 		m.query = strings.ToLower(strings.TrimSpace(args))
 		m.clampSel()
 		return m, nil
+	case "tovault", "tv", "cifrar":
+		return m.cmdTovault()
+	case "newp", "newtemplate":
+		return m.cmdNewp(args)
+	case "deltemplate", "deltpl":
+		return m.cmdDelTemplate(args)
+	case "tmpl", "templates", "plantillas":
+		return m.cmdListTemplates()
 	case "help", "h":
 		m.showHelp = !m.showHelp
 		return m, nil
@@ -519,6 +592,7 @@ func (m Model) cmdNew(arg string) (tea.Model, tea.Cmd) {
 	if m.board == secSecrets {
 		return m.secretNew(arg)
 	}
+	// NOTAS: el argumento es el título inicial.
 	title := strings.TrimSpace(arg)
 	if title == "" {
 		title = "Nueva nota"
@@ -544,11 +618,19 @@ func (m Model) cmdNew(arg string) (tea.Model, tea.Cmd) {
 	return m, textinput.Blink
 }
 
-func (m Model) secretNew(title string) (tea.Model, tea.Cmd) {
-	if strings.TrimSpace(title) == "" {
-		title = "Nueva entrada"
+// secretNew crea una entrada con la plantilla indicada
+// (:new sin args → plantilla "simple": usuario + valor).
+func (m Model) secretNew(tplName string) (tea.Model, tea.Cmd) {
+	tplName = strings.ToLower(strings.TrimSpace(tplName))
+	if tplName == "" {
+		tplName = defaultTemplate
 	}
-	sc := store.Secret{Title: title}
+	tpl, ok := m.findTemplate(tplName)
+	if !ok {
+		m.setErr("Plantilla inexistente: " + tplName + " · disponibles: " + m.templateNames())
+		return m, nil
+	}
+	sc := store.Secret{Template: tpl.Name}
 	created, err := m.createSecret(sc)
 	if err != nil {
 		m.setErr(err.Error())
@@ -558,6 +640,79 @@ func (m Model) secretNew(title string) (tea.Model, tea.Cmd) {
 	m.selectByID(created.ID)
 	m.openEditor(created.ID)
 	return m, textinput.Blink
+}
+
+// cmdTovault convierte la nota seleccionada en entrada cifrada del vault
+// (plantilla "nota") y borra la original. Ambos lados sincronizan.
+func (m Model) cmdTovault() (tea.Model, tea.Cmd) {
+	if m.board != secNotes {
+		m.setErr("':tovault' se usa sobre una nota.")
+		return m, nil
+	}
+	n, ok := m.curNote()
+	if !ok {
+		m.setErr("Selecciona una nota con j/k")
+		return m, nil
+	}
+	sc := store.Secret{Template: "nota", Title: n.Title, Notes: n.Body}
+	created, err := m.createSecret(sc)
+	if err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	if err := m.st.SoftDeleteNote(n.ID); err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.board = secSecrets
+	m.selIdx = 0
+	m.refresh()
+	m.selectByID(created.ID)
+	m.notice = "✓ Nota cifrada en el vault (original borrada)"
+	return m, nil
+}
+
+// cmdNewp abre el constructor de plantillas (:newp [nombre]).
+func (m Model) cmdNewp(name string) (tea.Model, tea.Cmd) {
+	m.ed.open = true
+	m.ed.building = true
+	m.ed.sec = secSecrets
+	m.ed.id = 0
+	m.ed.field = 0
+	m.ed.cmd = false
+	m.ed.cmdLn.SetValue("")
+	m.ed.secFields = nil
+	m.ed.builder = newTplBuilder(strings.TrimSpace(name))
+	m.blurAllEditorWidgets()
+	m.errMsg, m.notice = "", ""
+	m.applyResponsiveSizes()
+	m.ed.builder.name.Focus()
+	return m, textinput.Blink
+}
+
+func (m Model) cmdDelTemplate(name string) (tea.Model, tea.Cmd) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, b := range builtinVaultTemplates() {
+		if b.Name == name {
+			m.setErr("Las plantillas integradas no se pueden borrar.")
+			return m, nil
+		}
+	}
+	if err := m.st.DeleteTemplate(name); err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.notice = "✓ Plantilla eliminada: " + name
+	return m, nil
+}
+
+func (m Model) cmdListTemplates() (tea.Model, tea.Cmd) {
+	var lines []string
+	for _, t := range m.loadVaultTemplates() {
+		lines = append(lines, fmt.Sprintf("%s %s · :new %s", t.Icon, t.Title, t.Name))
+	}
+	m.notice = strings.Join(lines, "   |   ")
+	return m, nil
 }
 
 func (m Model) cmdEdit() (tea.Model, tea.Cmd) {
@@ -685,11 +840,46 @@ func (m Model) yankPassword() (tea.Model, tea.Cmd) {
 		m.setErr("Selecciona una entrada con j/k")
 		return m, nil
 	}
-	if err := clipboard.WriteAll(s.Password); err != nil {
+
+	tplName := s.Template
+	if tplName == "" {
+		tplName = defaultTemplate
+	}
+	tpl, found := m.findTemplate(tplName)
+	extra := m.extraBy[s.UUID]
+	if !found {
+		tpl, _ = m.findTemplate(defaultTemplate)
+	}
+	secretVal := ""
+	for _, f := range tpl.Fields {
+		if !f.Sensitive || f.Multi {
+			continue
+		}
+		switch f.Key {
+		case "username":
+			secretVal = s.Username
+		case "password":
+			secretVal = s.Password
+		case "url":
+			secretVal = s.URL
+		case "notes":
+			secretVal = s.Notes
+		default:
+			secretVal = extra[f.Key]
+		}
+		if secretVal != "" {
+			break
+		}
+	}
+	if secretVal == "" {
+		m.setErr("La entrada no tiene ningún valor secreto que copiar")
+		return m, nil
+	}
+	if err := clipboard.WriteAll(secretVal); err != nil {
 		m.setErr(fmt.Sprintf("portapapeles no disponible: %v", err))
 		return m, nil
 	}
-	m.notice = "✓ Contraseña copiada al portapapeles"
+	m.notice = "✓ Valor copiado al portapapeles"
 	return m, nil
 }
 
@@ -726,7 +916,8 @@ func (m Model) persistNote(n store.Note) error {
 	return m.st.UpdateNote(&db)
 }
 
-// persistSecret cifra los cuatro campos sensibles (URL queda en claro).
+// persistSecret cifra los campos sensibles y el blob de campos libres
+// (la URL queda en claro: metadato útil para búsqueda/sync).
 func (m Model) persistSecret(s store.Secret) error {
 	db := s
 	var err error
@@ -742,23 +933,33 @@ func (m Model) persistSecret(s store.Secret) error {
 	if db.Notes, err = m.sess.SealField(s.Notes); err != nil {
 		return err
 	}
+	if db.Extra, err = m.sess.SealField(s.Extra); err != nil {
+		return err
+	}
 	return m.st.UpdateSecret(&db)
 }
 
-// createSecret inserta una entrada ya cifrada.
+// createSecret inserta una entrada sellando SUS valores (título, campos
+// estándar y blob extra). Los vacíos se sellan como "".
 func (m Model) createSecret(sc store.Secret) (store.Secret, error) {
 	db := sc
 	var err error
 	if db.Title, err = m.sess.SealField(sc.Title); err != nil {
 		return sc, err
 	}
-	if db.Username, err = m.sess.SealField(""); err != nil {
+	if db.Username, err = m.sess.SealField(sc.Username); err != nil {
 		return sc, err
 	}
-	if db.Password, err = m.sess.SealField(""); err != nil {
+	if db.Password, err = m.sess.SealField(sc.Password); err != nil {
 		return sc, err
 	}
-	if db.Notes, err = m.sess.SealField(""); err != nil {
+	if db.URL, err = m.sess.SealField(sc.URL); err != nil {
+		return sc, err
+	}
+	if db.Notes, err = m.sess.SealField(sc.Notes); err != nil {
+		return sc, err
+	}
+	if db.Extra, err = m.sess.SealField(sc.Extra); err != nil {
 		return sc, err
 	}
 	return m.st.CreateSecret(db)
@@ -788,7 +989,17 @@ func (m *Model) refresh() {
 			ss.Username = m.unsealOr(ss.Username, "")
 			ss.Password = m.unsealOr(ss.Password, "")
 			ss.Notes = m.unsealOr(ss.Notes, "")
+			ss.Extra = m.unsealOr(ss.Extra, "")
 			m.secrets = append(m.secrets, ss)
+			if ss.Extra != "" {
+				var em map[string]string
+				if json.Unmarshal([]byte(ss.Extra), &em) == nil {
+					if m.extraBy == nil {
+						m.extraBy = map[string]map[string]string{}
+					}
+					m.extraBy[ss.UUID] = em
+				}
+			}
 		}
 	}
 	m.clampSel()
@@ -908,6 +1119,70 @@ func (m *Model) enterLocked() {
 
 // ---- editor ----
 
+func (m *Model) blurAllEditorWidgets() {
+	m.ed.title.Blur()
+	m.ed.body.Blur()
+	for i := range m.ed.secFields {
+		m.ed.secFields[i].input.Blur()
+	}
+	if m.ed.builder != nil {
+		m.ed.builder.name.Blur()
+		for i := range m.ed.builder.rows {
+			m.ed.builder.rows[i].label.Blur()
+		}
+	}
+	m.ed.cmdLn.Blur()
+}
+
+func (m *Model) buildSecFields(tpl vaultTemplate, s store.Secret, extra map[string]string) {
+	m.ed.secFields = nil
+	for _, def := range tpl.Fields {
+		label := def.Label
+		in := newTextInput(label, def.Sensitive)
+		var val string
+		switch def.Key {
+		case "username":
+			val = s.Username
+		case "password":
+			val = s.Password
+		case "url":
+			val = s.URL
+		case "notes":
+			val = s.Notes
+		default:
+			val = extra[def.Key]
+		}
+		if def.Multi {
+			m.ed.body.SetValue(val)
+			in.SetValue("")
+		} else {
+			in.SetValue(val)
+		}
+		m.ed.secFields = append(m.ed.secFields, secFieldInput{def: def, input: in})
+	}
+}
+
+func (m *Model) openSecretEditor(id int64) {
+	s, ok := m.byIDSecret(id)
+	if !ok {
+		return
+	}
+	tplName := s.Template
+	if tplName == "" {
+		tplName = defaultTemplate
+	}
+	tpl, found := m.findTemplate(tplName)
+	if !found {
+		tpl, _ = m.findTemplate(defaultTemplate)
+		tplName = defaultTemplate
+	}
+	m.ed.tplName = tplName
+	m.buildSecFields(tpl, s, m.extraBy[s.UUID])
+	m.ed.field = 0
+	m.applyResponsiveSizes()
+	m.ed.title.Focus()
+}
+
 func (m *Model) openEditor(id int64) {
 	m.ed.open = true
 	m.ed.sec = m.board
@@ -915,30 +1190,22 @@ func (m *Model) openEditor(id int64) {
 	m.ed.field = 0
 	m.ed.reveal = false
 	m.ed.cmd = false
+	m.ed.building = false
+	m.ed.secFields = nil
+	m.ed.extraVals = map[string]string{}
 	m.ed.cmdLn.SetValue("")
-	m.ed.title.Blur()
-	m.ed.body.Blur()
-	m.ed.user.Blur()
-	m.ed.pass.Blur()
-	m.ed.url.Blur()
-	m.ed.cmdLn.Blur()
+	m.blurAllEditorWidgets()
 	m.errMsg, m.notice = "", ""
 
 	if m.board == secSecrets {
-		if s, ok := m.byIDSecret(id); ok {
-			m.ed.title.SetValue(s.Title)
-			m.ed.user.SetValue(s.Username)
-			m.ed.pass.SetValue(s.Password)
-			m.ed.url.SetValue(s.URL)
-			m.ed.body.SetValue(s.Notes)
-		}
-		m.ed.title.Focus()
+		m.openSecretEditor(id)
 		return
 	}
 	if n, ok := m.byIDNote(id); ok {
 		m.ed.title.SetValue(n.Title)
 		m.ed.body.SetValue(n.Body)
 	}
+	m.applyResponsiveSizes()
 	m.ed.title.Focus()
 }
 
@@ -965,15 +1232,16 @@ func (m *Model) closeEditor() {
 	m.ed.id = 0
 	m.ed.cmd = false
 	m.ed.reveal = false
-	m.ed.title.Blur()
-	m.ed.body.Blur()
-	m.ed.user.Blur()
-	m.ed.pass.Blur()
-	m.ed.url.Blur()
-	m.ed.cmdLn.Blur()
+	m.ed.building = false
+	m.ed.secFields = nil
+	m.ed.builder = nil
+	m.blurAllEditorWidgets()
 }
 
 func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.ed.building {
+		return m.handleBuilderKey(msg)
+	}
 	if m.ed.cmd {
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -1010,10 +1278,15 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.saveEditor(false)
 	case msg.String() == "ctrl+r" && m.ed.sec == secSecrets:
 		m.ed.reveal = !m.ed.reveal
-		if m.ed.reveal {
-			m.ed.pass.EchoMode = textinput.EchoNormal
-		} else {
-			m.ed.pass.EchoMode = textinput.EchoPassword
+		for i := range m.ed.secFields {
+			if !m.ed.secFields[i].def.Sensitive {
+				continue
+			}
+			if m.ed.reveal {
+				m.ed.secFields[i].input.EchoMode = textinput.EchoNormal
+			} else {
+				m.ed.secFields[i].input.EchoMode = textinput.EchoPassword
+			}
 		}
 		return m, nil
 	}
@@ -1026,58 +1299,81 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) editorFieldCount() int {
-	if m.ed.sec == secSecrets {
-		return 5 // título, usuario, contraseña, url, notas
+	switch {
+	case m.ed.building:
+		return m.ed.builder.widgetCount()
+	case m.ed.sec == secSecrets:
+		return len(m.ed.secFields) + 1 // índice 0 = título
+	default:
+		return 2 // título, cuerpo
 	}
-	return 2 // título, cuerpo
+}
+
+// focusEditorIndex enfoca el widget del índice dado (blur del resto).
+func (m *Model) focusEditorIndex(i int) {
+	m.blurAllEditorWidgets()
+	switch {
+	case i < 0 || i >= m.editorFieldCount():
+		m.ed.title.Focus()
+	case m.ed.building:
+		b := m.ed.builder
+		m.blurAllEditorWidgets()
+		switch {
+		case i == 0:
+			b.name.Focus()
+		case (i-1)%2 == 0:
+			b.rows[(i-1)/2].label.Focus()
+		}
+		// El selector de tipo no es un input: solo resalta en la vista.
+	case m.ed.sec == secNotes:
+		if i == 0 {
+			m.ed.title.Focus()
+		} else {
+			m.ed.body.Focus()
+		}
+	default:
+		idx := i - 1
+		if idx < 0 || idx >= len(m.ed.secFields) {
+			m.ed.title.Focus()
+			return
+		}
+		// PUNTERO al elemento del slice: Focus() sobre una copia no pega.
+		f := &m.ed.secFields[idx]
+		if f.def.Multi {
+			m.ed.body.Focus()
+		} else {
+			f.input.Focus()
+		}
+	}
 }
 
 func (m *Model) refocusEditorField() {
-	m.ed.title.Blur()
-	m.ed.body.Blur()
-	m.ed.user.Blur()
-	m.ed.pass.Blur()
-	m.ed.url.Blur()
-	switch {
-	case m.ed.sec == secNotes && m.ed.field == 0:
-		m.ed.title.Focus()
-	case m.ed.sec == secNotes:
-		m.ed.body.Focus()
-	case m.ed.field == 0:
-		m.ed.title.Focus()
-	case m.ed.field == 1:
-		m.ed.user.Focus()
-	case m.ed.field == 2:
-		m.ed.pass.Focus()
-	case m.ed.field == 3:
-		m.ed.url.Focus()
-	default:
-		m.ed.body.Focus()
-	}
+	m.focusEditorIndex(m.ed.field)
 }
 
 func (m Model) routeEditorField(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if m.ed.sec == secNotes {
-		switch m.ed.field {
-		case 0:
+	switch {
+	case m.ed.building:
+		// manejado por handleBuilderKey; nunca debería llegar aquí
+		return m, nil
+	case m.ed.sec == secNotes:
+		if m.ed.field == 0 {
 			m.ed.title, cmd = m.ed.title.Update(msg)
-		default:
+		} else {
 			m.ed.body, cmd = m.ed.body.Update(msg)
 		}
-		return m, cmd
-	}
-	switch m.ed.field {
-	case 0:
+	case m.ed.sec == secSecrets && m.ed.field == 0:
 		m.ed.title, cmd = m.ed.title.Update(msg)
-	case 1:
-		m.ed.user, cmd = m.ed.user.Update(msg)
-	case 2:
-		m.ed.pass, cmd = m.ed.pass.Update(msg)
-	case 3:
-		m.ed.url, cmd = m.ed.url.Update(msg)
-	default:
-		m.ed.body, cmd = m.ed.body.Update(msg)
+	case m.ed.sec == secSecrets && m.ed.field-1 < len(m.ed.secFields):
+		f := m.ed.secFields[m.ed.field-1]
+		if f.def.Multi {
+			m.ed.body, cmd = m.ed.body.Update(msg)
+		} else {
+			in := f.input
+			in, cmd = in.Update(msg)
+			m.ed.secFields[m.ed.field-1].input = in
+		}
 	}
 	return m, cmd
 }
@@ -1088,6 +1384,20 @@ func (m Model) execEditorCmd(raw string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.errMsg = ""
+	if m.ed.building {
+		switch name {
+		case "w", "write":
+			return m.saveTemplate(false)
+		case "wq", "x":
+			return m.saveTemplate(true)
+		case "q", "quit", "q!":
+			m.closeEditor()
+			return m, nil
+		default:
+			m.setErr("En el constructor: :w crea la plantilla · :q cancela")
+			return m, nil
+		}
+	}
 	switch name {
 	case "w", "write":
 		return m.saveEditor(false)
@@ -1139,19 +1449,141 @@ func (m Model) saveSecret(close bool) (tea.Model, tea.Cmd) {
 		m.closeEditor()
 		return m, nil
 	}
-	target.Title = m.ed.title.Value()
-	target.Username = m.ed.user.Value()
-	target.Password = m.ed.pass.Value()
-	target.URL = strings.TrimSpace(m.ed.url.Value())
-	target.Notes = m.ed.body.Value()
+
+	target.Template = m.ed.tplName
+	extra := map[string]string{}
+	for _, f := range m.ed.secFields {
+		val := f.input.Value()
+		switch f.def.Key {
+		case "username":
+			target.Username = val
+		case "password":
+			target.Password = val
+		case "url":
+			target.URL = strings.TrimSpace(val)
+		case "notes":
+			target.Notes = val
+		default:
+			if val != "" {
+				extra[f.def.Key] = val
+			}
+		}
+	}
 	if strings.TrimSpace(target.Title) == "" {
 		target.Title = "(sin título)"
 	}
+
+	if len(extra) > 0 {
+		// Se guarda en CLARO en la entidad de memoria; persistSecret lo
+		// sella junto al resto de campos sensibles (único punto de cifrado).
+		blob, err := json.Marshal(extra)
+		if err != nil {
+			m.setErr(err.Error())
+			return m, nil
+		}
+		target.Extra = string(blob)
+	} else {
+		target.Extra = ""
+	}
+
 	if err := m.persistSecret(target); err != nil {
 		m.setErr(err.Error())
 		return m, nil
 	}
 	m.refresh()
+	if close {
+		m.closeEditor()
+	}
+	return m, nil
+}
+
+// handleBuilderKey gestiona el formulario de :newp:
+// tab navega · ←/→/espacio cambian el tipo · ctrl+n añade · ctrl+d borra ·
+// ctrl+s crea · esc cancela. NO hay barra ':' (por eso nunca interfiere).
+func (m Model) handleBuilderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b := m.ed.builder
+	count := b.widgetCount()
+
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.closeEditor()
+		return m, nil
+	case tea.KeyTab, tea.KeyShiftTab:
+		delta := 1
+		if msg.Type == tea.KeyShiftTab {
+			delta = -1
+		}
+		m.ed.field = ((m.ed.field+delta)%count + count) % count
+		m.refocusEditorField()
+		return m, textinput.Blink
+	case tea.KeyCtrlS:
+		return m.saveTemplate(true)
+	case tea.KeyCtrlN:
+		b.appendRow()
+		// Foco en la ETIQUETA de la fila recién creada.
+		m.ed.field = 1 + (len(b.rows)-1)*2
+		m.refocusEditorField()
+		return m, textinput.Blink
+	case tea.KeyCtrlD:
+		if m.ed.field >= 1 {
+			b.deleteRow((m.ed.field - 1) / 2)
+			if m.ed.field >= count {
+				m.ed.field = count - 1
+			}
+			m.refocusEditorField()
+		}
+		return m, nil
+	case tea.KeyEnter:
+		// Enter sobre una etiqueta salta al selector de tipo de la fila.
+		if m.ed.field >= 1 && (m.ed.field-1)%2 == 0 {
+			m.ed.field++
+			m.refocusEditorField()
+			return m, textinput.Blink
+		}
+	case tea.KeyLeft, tea.KeyRight, tea.KeySpace:
+		if m.ed.field >= 1 && (m.ed.field-1)%2 == 1 { // widget de tipo
+			delta := 1
+			if msg.Type == tea.KeyLeft {
+				delta = -1
+			}
+			b.cycleType((m.ed.field-1)/2, delta)
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	switch {
+	case m.ed.field == 0:
+		m.ed.builder.name, cmd = m.ed.builder.name.Update(msg)
+	default:
+		row := (m.ed.field - 1) / 2
+		if row < len(b.rows) && (m.ed.field-1)%2 == 0 {
+			in := b.rows[row].label
+			in, cmd = in.Update(msg)
+			b.rows[row].label = in
+		}
+	}
+	return m, cmd
+}
+
+// saveTemplate crea la plantilla desde el formulario del constructor.
+func (m Model) saveTemplate(close bool) (tea.Model, tea.Cmd) {
+	name := strings.ToLower(strings.TrimSpace(m.ed.builder.name.Value()))
+	if name == "" {
+		m.setErr("Define el nombre interno (para invocarla con :new).")
+		return m, nil
+	}
+	fields, err := m.ed.builder.rowsToFields()
+	if err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	vt := vaultTemplate{Name: name, Title: name, Icon: "🔐", Fields: fields}
+	if err := m.st.CreateTemplate(encodeCustomTemplate(vt)); err != nil {
+		m.setErr(err.Error())
+		return m, nil
+	}
+	m.notice = "✓ Plantilla creada: usa :new " + name
 	if close {
 		m.closeEditor()
 	}

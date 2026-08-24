@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,26 +10,56 @@ import (
 	"github.com/yahwr/strongboxs/client/internal/ui/components"
 )
 
-// secretCard convierte una entrada de la bóveda en tarjeta.
-// La contraseña NUNCA se muestra salvo revealAll explícito del usuario.
-func secretCard(s store.Secret, reveal bool) components.Note {
-	title := s.Title
-	body := s.Username
-	if s.URL != "" {
-		if body != "" {
-			body += "\n"
+// secretCard convierte una entrada de la bóveda en tarjeta según SU
+// plantilla. Los valores sensibles NUNCA se muestran sin reveal explícito.
+func (m Model) secretCard(s store.Secret, reveal bool) components.Note {
+	tplName := s.Template
+	if tplName == "" {
+		tplName = defaultTemplate
+	}
+	tpl, ok := m.findTemplate(tplName)
+	if !ok {
+		tpl, _ = m.findTemplate(defaultTemplate)
+	}
+	extra := m.extraBy[s.UUID]
+
+	titleLine := s.Title
+	if tpl.Icon != "" {
+		titleLine = tpl.Icon + " " + titleLine
+	}
+
+	var lines []string
+	for _, f := range tpl.Fields {
+		var val string
+		switch f.Key {
+		case "username":
+			val = s.Username
+		case "password":
+			val = s.Password
+		case "url":
+			val = s.URL
+		case "notes":
+			continue // las notas no van en la tarjeta
+		default:
+			val = extra[f.Key]
 		}
-		body += s.URL
+		if val == "" {
+			continue
+		}
+		shown := val
+		if f.Sensitive && !reveal {
+			shown = maskText
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", f.Label, shown))
 	}
-	pw := maskText
-	if reveal {
-		pw = s.Password
+	if len(lines) == 0 {
+		lines = append(lines, helpStyle.Render("(vacía)"))
 	}
-	if body != "" {
-		body += "\n"
+	return components.Note{
+		Title: titleLine,
+		Body:  strings.Join(lines, "\n"),
+		Color: colorTeal,
 	}
-	body += helpStyle.Render("🔑 " + pw)
-	return components.Note{Title: title, Body: body, Color: colorTeal}
 }
 
 // viewBoard dibuja el tablero activo (notas o vault) con masonry,
@@ -74,7 +105,7 @@ func (m Model) boardGrid() string {
 	case secSecrets:
 		vs := m.visibleSecrets()
 		for i, s := range vs {
-			cardViews = append(cardViews, components.RenderCard(secretCard(s, m.revealAll), selected(i)))
+			cardViews = append(cardViews, components.RenderCard(m.secretCard(s, m.revealAll), selected(i)))
 		}
 		if len(vs) == 0 {
 			return emptyHint("Sin entradas en la bóveda.", ":new <título>  ·  añade tu primera contraseña")
