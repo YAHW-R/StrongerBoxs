@@ -108,6 +108,10 @@ func (m Model) buildPaletteItems() []paletteItem {
 		mm.searchLn.Focus()
 		return mm, textinput.Blink
 	})
+	add("Configurar sincronización…", "setup", func(mm Model) (tea.Model, tea.Cmd) {
+		mm.openSyncWizard(false)
+		return mm, textinput.Blink
+	})
 	add("Sincronizar ahora", "ctrl+s", func(mm Model) (tea.Model, tea.Cmd) {
 		mm.requestSync()
 		mm.notice = "⟳ Sincronizando cambios pendientes…"

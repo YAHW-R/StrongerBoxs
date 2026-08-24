@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,13 +34,8 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-// startSyncIfConfigured lanza el motor reactivo si hay variables de entorno.
-// Devuelve el manager (Trigger/flush), la Gate de la UI y si está activo.
-func startSyncIfConfigured(st *store.Store) (*sync.Manager, *sync.Gate, bool) {
-	url := os.Getenv("STRONGBOXS_SYNC_URL")
-	if url == "" {
-		return nil, nil, false
-	}
+// startManager construye y arranca el motor con unas credenciales dadas.
+func startManager(st *store.Store, creds sync.Credentials) (*sync.Manager, *sync.Gate) {
 	interval := 90 * time.Second
 	if s := os.Getenv("STRONGBOXS_SYNC_INTERVAL_SECS"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
@@ -47,20 +43,56 @@ func startSyncIfConfigured(st *store.Store) (*sync.Manager, *sync.Gate, bool) {
 		}
 	}
 	mgr := sync.NewManager(
-		st,
-		sync.Credentials{
-			BaseURL:  url,
-			Username: os.Getenv("STRONGBOXS_SYNC_USER"),
-			Password: os.Getenv("STRONGBOXS_SYNC_PASSWORD"),
-		},
-		interval,
+		st, creds, interval,
 		os.Getenv("STRONGBOXS_SYNC_DEBUG") != "",
 	)
 	gate := &sync.Gate{}
 	mgr.BindGate(gate)
 	mgr.Start(context.Background())
-	fmt.Printf("⟳ Sincronización reactiva → %s (push tras cada guardado · pull cada %s)\n", url, interval)
-	return mgr, gate, true
+	return mgr, gate
+}
+
+// buildSyncRuntime arma el puente UI↔motor:
+//   - si ya hay env/entorno configurado, arranca directamente;
+//   - si no, Start() del runtime persiste sync.env y arranca en caliente.
+func buildSyncRuntime(st *store.Store, declinedFallback bool) *ui.SyncRuntime {
+	rt := &ui.SyncRuntime{}
+
+	envURL := os.Getenv("STRONGBOXS_SYNC_URL")
+	envUser := strings.TrimSpace(os.Getenv("STRONGBOXS_SYNC_USER"))
+	envPass := os.Getenv("STRONGBOXS_SYNC_PASSWORD")
+
+	rt.Start = func(creds sync.Credentials) bool {
+		mgr, gate := startManager(st, creds)
+		rt.SetManager(mgr)
+		rt.Trigger = mgr.Trigger
+		rt.Gate = gate
+		st.SetMeta(map[string]string{"sync.configured": "1", "sync.declined": "0"})
+		fmt.Printf("⟳ Sincronización activa → %s\n", creds.BaseURL)
+		return true
+	}
+
+	if envURL != "" && envUser != "" && envPass != "" {
+		// Configuración heredada del archivo/entorno: arranca al momento.
+		rt.Start(sync.Credentials{BaseURL: envURL, Username: envUser, Password: envPass})
+	}
+
+	rt.IsConfigured = func() bool {
+		if envURL != "" && envUser != "" && envPass != "" {
+			return true
+		}
+		v, ok, _ := st.GetMeta("sync.configured")
+		return ok && v == "1"
+	}
+	rt.IsDeclined = func() bool {
+		v, ok, _ := st.GetMeta("sync.declined")
+		return ok && v == "1"
+	}
+	rt.MarkDeclined = func() {
+		_ = st.SetMeta(map[string]string{"sync.declined": "1"})
+	}
+	_ = declinedFallback
+	return rt
 }
 
 // runTUI lanza la app: el propio TUI gestiona setup, lock-screen y
@@ -78,26 +110,21 @@ func runTUI() {
 	}
 	defer st.Close()
 
-	// Sync reactiva: push tras cada guardado; pull de fondo solo en tablero.
-	mgr, gate, syncOn := startSyncIfConfigured(st)
+	// Sync reactiva con asistente de primera configuración dentro de la TUI.
+	rt := buildSyncRuntime(st, false)
 
 	sess := session.New(st, session.DefaultTTL, nil).WithAuthorizer(authn.Default())
 
-	var opts []ui.Opt
-	if syncOn {
-		opts = append(opts, ui.WithSync(mgr.Trigger, gate))
-	}
-
-	p := tea.NewProgram(ui.New(sess, st, opts...), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(sess, st, ui.WithSyncRuntime(rt)), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fatal(err)
 	}
 
 	// Flush final al salir: sube lo pendiente aunque la UI ya cerró.
-	if syncOn {
+	if m := rt.Manager(); m != nil {
 		fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if sum, err := mgr.RunOnce(fctx); err == nil {
+		if sum, err := m.RunOnce(fctx); err == nil && sum.Pushed+sum.Pulled > 0 {
 			fmt.Printf("⟳ Flush final: subidos=%d recibidos=%d\n", sum.Pushed, sum.Pulled)
 		}
 	}

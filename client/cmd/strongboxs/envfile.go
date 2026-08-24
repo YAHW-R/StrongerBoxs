@@ -56,3 +56,61 @@ func loadEnvFile(path string) error {
 	}
 	return sc.Err()
 }
+
+var syncEnvKeys = []string{
+	"STRONGBOXS_SYNC_URL",
+	"STRONGBOXS_SYNC_USER",
+	"STRONGBOXS_SYNC_PASSWORD",
+}
+
+// SaveSyncEnv escribe/actualiza las claves de sincronización en el archivo
+// de entorno preservando el resto de líneas y comentarios. Escritura
+// atómica (tmp+rename) con permisos 0600.
+func SaveSyncEnv(path string, url, user, pass string) error {
+	values := map[string]string{
+		"STRONGBOXS_SYNC_URL":      url,
+		"STRONGBOXS_SYNC_USER":     user,
+		"STRONGBOXS_SYNC_PASSWORD": pass,
+	}
+
+	var out []string
+	done := map[string]bool{}
+
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			replaced := false
+			for _, k := range syncEnvKeys {
+				if trimmed == k || strings.HasPrefix(trimmed, k+"=") ||
+					strings.HasPrefix(trimmed, k+" =") {
+					out = append(out, k+"="+values[k])
+					done[k] = true
+					replaced = true
+					break
+				}
+			}
+			if !replaced && line != "" {
+				out = append(out, line)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	for _, k := range syncEnvKeys {
+		if !done[k] {
+			out = append(out, k+"="+values[k])
+		}
+	}
+
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(out, "\n")+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}

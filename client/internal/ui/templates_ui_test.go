@@ -5,6 +5,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/yahwr/strongboxs/client/internal/crypto"
+
+	"github.com/yahwr/strongboxs/client/internal/sync"
 )
 
 func builderWithRows(t *testing.T, rows ...[2]string) *tplBuilder {
@@ -290,5 +294,84 @@ func TestTovaultConvertsNote(t *testing.T) {
 	raw, _ := m.st.ListSecrets()
 	if raw[0].Title == "idea privada" || strings.Contains(raw[0].Notes, "secreto") {
 		t.Error("campos del vault deberían estar cifrados en disco")
+	}
+}
+
+var declined bool
+
+func TestSyncWizardFlow(t *testing.T) {
+	declined = false
+	var started int
+	var gotUser string
+	var rt *SyncRuntime
+	rt = &SyncRuntime{
+		Start: func(c sync.Credentials) bool {
+			started++
+			gotUser = c.Username
+			rt.Trigger = func() {}
+			rt.Gate = &sync.Gate{}
+			return true
+		},
+		IsConfigured: func() bool { return started > 0 },
+		IsDeclined:   func() bool { return declined },
+		MarkDeclined: func() { declined = true },
+	}
+
+	m, _ := newTestModel(t)
+	m = New(m.sess, m.st, WithSyncRuntime(rt)) // sin bóveda → setup; wizard no debe abrir aquí
+
+	if _, err := crypto.CreateVault(m.st, testPw); err != nil {
+		t.Fatal(err)
+	}
+	m = New(m.sess, m.st, WithSyncRuntime(rt))
+	if m.state != viewLocked {
+		t.Fatalf("precondición lock: %d", m.state)
+	}
+	m.input.SetValue(testPw)
+	m = pressEnter(m)
+	if m.state != viewBoard {
+		t.Fatalf("precondición board: %d", m.state)
+	}
+	if m.wiz == nil || !m.wiz.open {
+		t.Fatal("primer arranque sin sync debe abrir el asistente")
+	}
+
+	// Esc = "más tarde": cierra, marca declined y libera la gate.
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = out.(Model)
+	if m.wiz.open || !declined || m.rt.Gate.Busy() {
+		t.Fatal("esc debió cerrar, marcar declined y liberar")
+	}
+
+	// Abrir de nuevo desde la paleta conceptual (directo) y completar.
+	m.openSyncWizard(false)
+	m.wiz.url.SetValue("http://localhost:8000")
+	m.wiz.user.SetValue("MiUsuario")
+	m.wiz.pass.SetValue("cuenta-pass-1")
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = out.(Model)
+
+	if started != 1 {
+		t.Fatalf("Start llamadas=%d", started)
+	}
+	if gotUser != "miusuario" {
+		t.Errorf("usuario normalizado=%q", gotUser)
+	}
+	if m.wiz.open || m.notice == "" {
+		t.Fatalf("wizard=%v notice=%q", m.wiz.open, m.notice)
+	}
+	if m.rt.Gate.Busy() {
+		t.Error("tras configurar la gate debe quedar libre")
+	}
+
+	// Validación: URL inválida no arranca.
+	m2 := New(m.sess, m.st, WithSyncRuntime(rt))
+	_ = m2
+	m.openSyncWizard(false)
+	m.wiz.url.SetValue("no-es-url")
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = out.(Model)
+	if started != 1 || m.errMsg == "" {
+		t.Errorf("URL inválida debe fallar validación; err=%q", m.errMsg)
 	}
 }

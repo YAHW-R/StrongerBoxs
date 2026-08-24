@@ -18,7 +18,9 @@ import (
 type Gate struct{ v atomic.Bool }
 
 func (g *Gate) Set(busy bool) { g.v.Store(busy) }
-func (g *Gate) Busy() bool    { return g == nil || g.v.Load() }
+func (g *Gate) Busy() bool {
+	return g != nil && g.v.Load() // nil ⇒ libre
+}
 
 const (
 	triggerDebounce = 1200 * time.Millisecond

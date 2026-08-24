@@ -96,6 +96,8 @@ func (m Model) viewBoard() string {
 	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
 	switch {
+	case m.wiz != nil && m.wiz.open:
+		return m.viewSyncWizard()
 	case m.pal.open:
 		return m.viewPalette()
 	case m.confirmOpen:

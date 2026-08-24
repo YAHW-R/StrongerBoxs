@@ -189,39 +189,32 @@ VAULT con ella seleccionada. Ambos cambios se sincronizan.
 
 ## 8. Sincronización por peticiones
 
-Opcional. Con `STRONGBOXS_SYNC_URL` definida (ver §10), un motor aparte de
-la TUI sincroniza de forma reactiva:
+### Primer uso: el asistente
 
-- **PUSH inmediato**: al guardar una nota/entrada (`ctrl+s`, `:w`, `:wq`),
-  crear (`:new`), borrar, fijar, archivar o convertir — los cambios suben
-  solos (agrupando ráfagas con ~1,2 s de debounce). También hay un *flush*
-  final al salir de la app.
-- **PULL solo en el tablero**: mientras tengas el editor o el constructor
-  abierto, el motor NO baja nada del servidor (no pisa lo que estás
-  escribiendo). El pull periódico corre únicamente cuando estás en la vista
-  principal.
-- Conflictos por **fecha**: gana el `updated_at` más nuevo; sin conexión tus
-  cambios quedan pendientes (`dirty`) y suben solos al reconectar.
-- Errores y estado se consultan internamente (Stats del motor); no ensucian
-  la pantalla. Viaja únicamente ciphertext.
+Al llegar al tablero sin sincronización configurada, se abre un
+**asistente emergente**: Servidor · Usuario · Contraseña de cuenta.
+`ctrl+s` valida, **escribe `~/.config/strongboxs/sync.env` por ti**
+(preservando otras líneas) y arranca el motor al momento — sin reiniciar.
 
-## 9. Configuración persistente
+- `esc` = "más tarde": no vuelve a preguntar en esta instalación.
+- Puedes abrirlo cuando quieras: `ctrl+k` → *"Configurar sincronización…"*.
+- El usuario se normaliza a minúsculas automáticamente.
 
-La app lee automáticamente `~/.config/strongboxs/sync.env`
-(o `STRONGBOXS_ENV_FILE`). Las variables ya exportadas en la shell tienen
-prioridad sobre el archivo.
+También puedes editar `sync.env` a mano o usar variables de entorno
+exportadas: tienen prioridad y la app las detecta al arranque.
 
-```bash
-mkdir -p ~/.config/strongboxs
-cat > ~/.config/strongboxs/sync.env <<'EOF'
-STRONGBOXS_SYNC_URL=http://localhost:8000
-STRONGBOXS_SYNC_USER=tu_usuario        # minúsculas/números/. _ -  (3-64)
-STRONGBOXS_SYNC_PASSWORD=passDeCuenta  # credencial distinta de la maestra
-STRONGBOXS_SYNC_INTERVAL_SECS=60       # opcional
-STRONGBOXS_SYNC_DEBUG=1                # opcional
-EOF
-chmod 600 ~/.config/strongboxs/sync.env
-```
+### Cómo funciona
+
+| Evento | Qué pasa |
+|---|---|
+| Guardas (`ctrl+s`, `:w`, `:wq`), creas, borras, fijas, archivas, conviertes | **PUSH inmediato** (debounce ~1,2 s agrupa ráfagas) |
+| Sales de la app | *flush* final de 5 s sube lo pendiente |
+| Editor/asistente abiertos | **PULL pausado**: el servidor no pisa lo que escribes |
+| Tablero, cada 90 s | PULL de fondo (`STRONGBOXS_SYNC_INTERVAL_SECS`) |
+
+Conflictos por **fecha**: gana el `updated_at` más nuevo. Sin conexión los
+cambios quedan pendientes (`dirty`) y suben solos al reconectar. Viaja solo
+ciphertext; errores y estado viven en los Stats del motor (no ensucian pantalla).
 
 ## 10. Compilación e instalación
 

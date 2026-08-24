@@ -108,8 +108,11 @@ make test           # suite completa: Go + pytest
 ### 2) Servidor (Docker)
 
 ```bash
-cp .env.example .env     # define STRONGBOXS_SECRET_KEY
+cp .env.example .env     # define STRONGBOXS_SECRET_KEY (SOLO servidor: firma JWT interna)
 make server-up           # API :8000 + PostgreSQL
+
+> La SECRET_KEY no se configura en el cliente; el cliente solo necesita
+> URL + usuario + contraseña de cuenta (ver §4 y client/README.md §8-§9).
 curl localhost:8000/health
 make server-down         # parar · make server-logs para logs
 ```
@@ -126,13 +129,9 @@ strongboxs               # primer arranque: crea tu contraseña maestra
 ### 4) Activar sincronización (opcional)
 
 ```bash
-mkdir -p ~/.config/strongboxs
-cat > ~/.config/strongboxs/sync.env <<'EOF'
-STRONGBOXS_SYNC_URL=http://localhost:8000
-STRONGBOXS_SYNC_USER=tu_usuario
-STRONGBOXS_SYNC_PASSWORD=passDeCuenta
-EOF
-chmod 600 ~/.config/strongboxs/sync.env
+strongboxs   # → asistente inicial: te pregunta servidor/usuario/clave
+             #   y configura ~/.config/strongboxs/sync.env ella misma
+             # (también puedes crear ese archivo a mano; ver client/README.md)
 ```
 
 ## Tareas Make

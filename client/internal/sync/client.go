@@ -88,19 +88,30 @@ type Client struct {
 	tokenExp time.Time
 }
 
-func NewClient(creds Credentials) (*Client, error) {
+// ValidateCredentials normaliza y valida credenciales de cuenta.
+// Devuelve el username normalizado o un error descriptivo para el usuario.
+func ValidateCredentials(creds Credentials) (string, error) {
 	url := strings.TrimRight(creds.BaseURL, "/")
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return nil, fmt.Errorf("sync: URL inválida %q", creds.BaseURL)
+		return "", fmt.Errorf("sync: URL inválida %q", creds.BaseURL)
 	}
 	user := strings.ToLower(strings.TrimSpace(creds.Username))
 	if !usernameRE.MatchString(user) {
-		return nil, fmt.Errorf(
-			"sync: usuario inválido %q (3-64 caracteres: minúsculas, números, '.', '_', '-')",
+		return "", fmt.Errorf(
+			"usuario inválido %q (3-64 caracteres: minúsculas, números, '.', '_', '-')",
 			creds.Username)
 	}
 	if creds.Password == "" {
-		return nil, fmt.Errorf("sync: falta la contraseña de cuenta (STRONGBOXS_SYNC_PASSWORD)")
+		return "", fmt.Errorf("falta la contraseña de cuenta")
+	}
+	return user, nil
+}
+
+func NewClient(creds Credentials) (*Client, error) {
+	url := strings.TrimRight(creds.BaseURL, "/")
+	user, err := ValidateCredentials(creds)
+	if err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
 	}
 	return &Client{
 		baseURL: url,

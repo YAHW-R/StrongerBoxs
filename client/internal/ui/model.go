@@ -152,8 +152,8 @@ type Model struct {
 	secrets []store.Secret               // descifradas ídem
 	extraBy map[string]map[string]string // uuid → campos libres descifrados
 
-	syncTrigger func()     // push reactivo tras mutaciones (opcional)
-	gate        *sync.Gate // ocupa/libera el PULL según la UI
+	rt  *SyncRuntime     // puente con el motor reactivo (opcional)
+	wiz *syncWizardState // asistente de configuración
 
 	query       string // filtro '/' activo
 	searchFocus bool   // escribiendo en la barra '/'
@@ -180,11 +180,21 @@ type Model struct {
 // Opt configura extras del modelo (sincronización reactiva).
 type Opt func(*Model)
 
-// WithSync conecta el push reactivo y la puerta de ocupación del PULL.
+// WithSyncRuntime conecta la UI con el motor (trigger, gate, arranque).
+func WithSyncRuntime(rt *SyncRuntime) Opt {
+	return func(m *Model) { m.rt = rt }
+}
+
+// WithSync mantiene compatibilidad: solo trigger + gate.
 func WithSync(trigger func(), g *sync.Gate) Opt {
 	return func(m *Model) {
-		m.syncTrigger = trigger
-		m.gate = g
+		if m.rt == nil {
+			m.rt = &SyncRuntime{}
+		}
+		m.rt.Trigger = trigger
+		if g != nil {
+			m.rt.Gate = g
+		}
 	}
 }
 
@@ -228,6 +238,11 @@ func New(sess *session.Manager, st *store.Store, opts ...Opt) Model {
 		m.refresh()
 	default:
 		m.state = viewLocked
+	}
+
+	// Primer paso de onboarding: ofrecer configurar la sincronización una vez.
+	if m.shouldOfferSyncSetup() {
+		m.openSyncWizard(true)
 	}
 	return m
 }
@@ -308,6 +323,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		switch {
+		case m.wiz != nil && m.wiz.open:
+			return m.handleWizardKey(msg)
 		case m.ed.open:
 			return m.handleEditorKey(msg)
 		case m.pal.open:
@@ -1098,17 +1115,25 @@ func (m *Model) moveSel(delta int) {
 
 func (m *Model) setErr(s string) { m.errMsg = s }
 
-// setBusy marca la Gate: con editor/plantilla abiertos el PULL se pausa.
+// shouldOfferSyncSetup: ¿toca ofrecer el asistente? Solo en tablero,
+// con runtime presente, sin cuenta configurada y sin "no ahora".
+func (m Model) shouldOfferSyncSetup() bool {
+	return m.state == viewBoard && m.rt != nil &&
+		m.rt.IsConfigured != nil && m.rt.IsDeclined != nil &&
+		!m.rt.IsConfigured() && !m.rt.IsDeclined()
+}
+
+// setBusy marca la Gate: con editor/asistente abiertos el PULL se pausa.
 func (m *Model) setBusy(b bool) {
-	if m.gate != nil {
-		m.gate.Set(b)
+	if m.rt != nil && m.rt.Gate != nil {
+		m.rt.Gate.Set(b)
 	}
 }
 
 // requestSync dispara un ciclo push reactivo (coalescido en el motor).
 func (m *Model) requestSync() {
-	if m.syncTrigger != nil {
-		m.syncTrigger()
+	if m.rt != nil && m.rt.Trigger != nil {
+		m.rt.Trigger()
 	}
 }
 
@@ -1133,6 +1158,9 @@ func (m Model) submitUnlock() (tea.Model, tea.Cmd) {
 	m.input.SetValue("")
 	m.state = viewBoard
 	m.refresh()
+	if m.shouldOfferSyncSetup() {
+		m.openSyncWizard(true)
+	}
 	return m, nil
 }
 
@@ -1170,6 +1198,9 @@ func (m Model) submitSetup() (tea.Model, tea.Cmd) {
 	}
 	m.state = viewBoard
 	m.refresh()
+	if m.shouldOfferSyncSetup() {
+		m.openSyncWizard(true)
+	}
 	return m, nil
 }
 
@@ -1183,6 +1214,7 @@ func (m *Model) enterLocked() {
 	m.firstPw = ""
 	m.errMsg, m.notice = "", ""
 	m.revealAll = false
+	m.closeSyncWizard()
 	m.pal.open = false
 	m.confirmOpen = false
 	m.closeEditor()
