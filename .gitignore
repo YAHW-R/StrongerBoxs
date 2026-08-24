@@ -1,2 +1,4 @@
 .env
 ./client/bin/
+./client/bin/*
+./client/bin/strongboxs
